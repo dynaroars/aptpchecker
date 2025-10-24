@@ -19,6 +19,10 @@ def main():
                         help="maximum number of nodes to check in parallel")
     parser.add_argument('--timeout', type=float, default=1000,
                         help="timeout in seconds")
+    parser.add_argument('--use_stabilize', action='store_true', default=False,
+                        help="use stabilize to prove the proof")
+    parser.add_argument('--use_pruning', action='store_true', default=False,
+                        help="use pruning to prove the proof")
     parser.add_argument('--result_file', type=str, default=None,
                         help="path to result file")
     
@@ -44,15 +48,12 @@ def main():
             verbose=False
         ) 
         
-        enable_X = bool(int(os.getenv("X", 0)))
-        enable_S = bool(int(os.getenv("S", 0)))
-        
         status = proof_checker.prove(
             proof=proof, 
             batch=args.batch, 
-            expand_factor=2.0 if enable_X else 1.0, 
+            expand_factor=2.0 if args.use_pruning else 1.0, 
             timeout=args.timeout,
-            refine=enable_S,
+            refine=args.use_stabilize,
         )
         
         if status != ProofReturnStatus.CERTIFIED:
