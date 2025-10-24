@@ -35,11 +35,6 @@ def main():
     
     for objective in objectives:
         
-        print(f'{objective.lower_bound.shape=}')
-        print(f'{objective.upper_bound.shape=}')
-        print(f'{objective.cs.shape=}')
-        print(f'{objective.rhs.shape=}')
-        print(f'{proof=}')
         print(f'Extract ONNX and APTP in {time.time() - START_TIME:.04f} seconds')
         
         proof_checker = ProofChecker(
