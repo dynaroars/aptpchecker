@@ -87,6 +87,7 @@ def _mip_solver_worker(candidate):
     return var_name, vlb, vub, neuron_refined
 
 
+@torch.no_grad()
 def _build_solver_input(model, input_lower, input_upper):
     layer_vars = []
     if input_lower.ndim == 4:
@@ -102,7 +103,7 @@ def _build_solver_input(model, input_lower, input_upper):
     model.update()
     return layer_vars, (input_lower, input_upper)
 
-
+@torch.no_grad()
 def _build_solver_linear(model, layer, layer_name, layer_bounds, prev_vars, c, refine):
     global MULTIPROCESS_MODEL
     layer_vars = []
@@ -164,6 +165,7 @@ def _build_solver_linear(model, layer, layer_name, layer_bounds, prev_vars, c, r
     return layer_vars, (lower, upper)
 
 
+@torch.no_grad()
 def _build_solver_relu(model, layer, layer_name, prev_vars):
     # output vars
     layer_vars = []
@@ -216,6 +218,7 @@ def _build_solver_relu(model, layer, layer_name, prev_vars):
     return layer_vars, (lower, upper)
 
 
+@torch.no_grad()
 def _build_solver_flatten(model, layer, layer_name, prev_vars):
     layer_vars = np.array(prev_vars).reshape(-1).tolist()
     lower = torch.tensor([v.lb for v in layer_vars])

@@ -2,11 +2,11 @@ import argparse
 import time
 import os 
 
+from checker.checker import ProofChecker, ProofReturnStatus
 from util.network.read_onnx import parse_onnx
 from util.spec.read_aptp import read_aptp
-from checker.checker import ProofChecker
 
-if __name__ == '__main__':
+def main():
     START_TIME = time.time()
 
     # argument
@@ -19,38 +19,57 @@ if __name__ == '__main__':
                         help="maximum number of nodes to check in parallel")
     parser.add_argument('--timeout', type=float, default=1000,
                         help="timeout in seconds")
+    parser.add_argument('--result_file', type=str, default=None,
+                        help="path to result file")
+    
     args = parser.parse_args()   
     
+    if args.result_file:
+        if os.path.exists(args.result_file):
+            print(f'[!] {args.result_file=} already exists. Skip.')
+            return
     # extract APTP/ONNX
-    objective, proof = read_aptp(args.aptp)
+    objectives, proof = read_aptp(args.aptp)
     net, input_shape, _, _ = parse_onnx(args.onnx)
     print(net)
     
-    print(f'{objective.lower_bound=}')
-    print(f'{objective.upper_bound=}')
-    print(f'{objective.cs=}')
-    print(f'{objective.rhs=}')
-    print(f'{proof=}')
-    print(f'Extract ONNX and APTP in {time.time() - START_TIME:.04f} seconds')
-    
-    proof_checker = ProofChecker(
-        net=net, 
-        input_shape=input_shape, 
-        objective=objective, 
-        verbose=False
-    ) 
-    
-    enable_X = bool(int(os.getenv("X", 0)))
-    enable_S = bool(int(os.getenv("S", 0)))
-    
-    status = proof_checker.prove(
-        proof=proof, 
-        batch=args.batch, 
-        expand_factor=2.0 if enable_X else 1.0, 
-        timeout=args.timeout,
-        refine=enable_S,
-    )
-    runtime = time.time() - START_TIME
+    for objective in objectives:
+        
+        print(f'{objective.lower_bound.shape=}')
+        print(f'{objective.upper_bound.shape=}')
+        print(f'{objective.cs.shape=}')
+        print(f'{objective.rhs.shape=}')
+        print(f'{proof=}')
+        print(f'Extract ONNX and APTP in {time.time() - START_TIME:.04f} seconds')
+        
+        proof_checker = ProofChecker(
+            net=net, 
+            input_shape=input_shape, 
+            objective=objective, 
+            verbose=False
+        ) 
+        
+        enable_X = bool(int(os.getenv("X", 0)))
+        enable_S = bool(int(os.getenv("S", 0)))
+        
+        status = proof_checker.prove(
+            proof=proof, 
+            batch=args.batch, 
+            expand_factor=2.0 if enable_X else 1.0, 
+            timeout=args.timeout,
+            refine=enable_S,
+        )
+        
+        if status != ProofReturnStatus.CERTIFIED:
+            break
+        
+    runtime = time.time() - START_TIME    
     print(f'{status=}')
     print(f'{runtime=:.04f} seconds')
     
+    if args.result_file:
+        with open(args.result_file, 'w') as f:
+            print(f'{status},{runtime:.04f}', file=f)
+    
+if __name__ == '__main__':
+    main()

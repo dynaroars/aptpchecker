@@ -319,7 +319,9 @@ def read_hidden(filename: str) -> list:
         node = []
         for item in clause:
             direction, neuron_name, point = item.replace('(', '').replace(')', '').split()
-            # print(f'{direction=}, {neuron_name=}, {point=}')
+            print(f'{direction=}, {neuron_name=}, {point=}')
+            if point.startswith('Y'):
+                continue
             assert float(point) == 0, f'Invalid {point=}'
             assert neuron_name in declared_neuron_names, f'Invalid {neuron_name=} {declared_neuron_names=}'
             neuron_id = int(neuron_name.split('_')[1])
@@ -327,28 +329,32 @@ def read_hidden(filename: str) -> list:
                 node.append(neuron_id)
             else:
                 node.append(-neuron_id)
-        proof.append(node)
+        if node:
+            proof.append(node)
     return proof
 
 @beartype
-def read_aptp(filename: str) -> tuple[Objective, list]:
+def read_aptp(filename: str) -> tuple[list[Objective], list]:
     print(f'\n############ Extract APTP ############\n')
     assert filename.endswith('.aptp'), filename
-    # extract input and output properties
-    in_out = read_input_output(filename)
-    # only support a single CNF properties
-    assert len(in_out) == len(in_out[0][1]) == 1
-    
     # extract proof tree
     proof = read_hidden(filename)
-    print(f'{in_out=}')
     print(f'{proof=}')
+    assert len(proof) > 0
     
+    # extract input and output properties
+    in_out = read_input_output(filename)
+    assert len(in_out) == 1
+    
+    bounds = in_out[0][0]
+    objectives = []
+    for out in in_out[0][1]:
+        objective = Objective((bounds, out))
+        objectives.append(objective)
+        
     # validate
     cnf = CNF(from_clauses=proof)
     with Solver(bootstrap_with=cnf) as solver:
         assert not solver.solve(), f'Invalid proof syntax: {proof=}'
     
-    # assert len(proof) > 0
-    objective = Objective((in_out[0][0], in_out[0][1][0]))
-    return objective, proof
+    return objectives, proof
