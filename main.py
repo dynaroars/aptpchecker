@@ -3,8 +3,8 @@ import time
 import os 
 
 from checker.checker import ProofChecker, ProofReturnStatus
-from util.network.read_onnx import parse_onnx
-from util.spec.read_aptp import read_aptp
+from helper.network.read_onnx import parse_onnx
+from helper.spec.read_aptp import read_aptp
 
 def main():
     START_TIME = time.time()
@@ -30,7 +30,7 @@ def main():
             return
     # extract APTP/ONNX
     objectives, proof = read_aptp(args.aptp)
-    net, input_shape, _, _ = parse_onnx(args.onnx)
+    net, input_shape, _ = parse_onnx(args.onnx)
     print(net)
     
     for objective in objectives:
