@@ -127,6 +127,7 @@ def _build_solver_linear(model, layer, layer_name, layer_bounds, prev_vars, c, r
     assert torch.all(lower <= upper)
     
     # this layer vars
+    assert weight.size(0) == lower.size(0) == upper.size(0)
     for neuron_idx in range(weight.size(0)):
         v = model.addVar(
             lb=lower[neuron_idx].item(), 
