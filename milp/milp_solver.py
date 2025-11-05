@@ -111,6 +111,12 @@ def _build_solver_linear(model, layer, layer_name, layer_bounds, prev_vars, c, r
     # this layer weight
     weight = layer.weight.clone()
     bias = layer.bias.clone()
+    
+    # last layer
+    if c is not None:
+        weight = c.squeeze(0).mm(weight)
+        bias = c.squeeze(0).mm(bias.unsqueeze(-1)).view(-1)
+
     W_plus = torch.clamp(weight, min=0.)
     W_minus = torch.clamp(weight, max=0.)
     
@@ -120,11 +126,6 @@ def _build_solver_linear(model, layer, layer_name, layer_bounds, prev_vars, c, r
     lower = W_plus @ layer_bounds[0] + W_minus @ layer_bounds[1] + bias
     assert torch.all(lower <= upper)
     
-    # last layer
-    if c is not None:
-        weight = c.squeeze(0).mm(weight)
-        bias = c.squeeze(0).mm(bias.unsqueeze(-1)).view(-1)
-
     # this layer vars
     for neuron_idx in range(weight.size(0)):
         v = model.addVar(
