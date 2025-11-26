@@ -6,6 +6,7 @@ backup/
 scripts/
 result/
 result_bug/
+ref/
 
 
 *.log

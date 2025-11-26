@@ -15,7 +15,10 @@ def verify(args, onnx_path, vnnlib_path, output_path, timeout):
     
     os.chdir(args.verifier_dir)
     
-    setting_path = os.path.join(args.home_dir, 'verifier/config/neuralsat/settings.json')
+    if os.environ.get('NEURALSAT_SYNTHETIC_BUG_DROP_PROBABILITY') is not None:
+        setting_path = os.path.join(args.home_dir, 'verifier/config/neuralsat/settings_bug.json') # attack is disabled for checking synthetic bugs
+    else:
+        setting_path = os.path.join(args.home_dir, 'verifier/config/neuralsat/settings.json')
     
     assert os.path.exists(setting_path), f"Setting file does not exist: {setting_path=}"
     

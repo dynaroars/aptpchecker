@@ -3,7 +3,6 @@ general:
 model:
   onnx_quirks: "{'Reshape': {'fix_batch_size': True}}"
 solver:
-  bound_prop_method: crown-optimized
   crown:
     batch_size: 256
 bab:
