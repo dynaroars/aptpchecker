@@ -1,0 +1,18 @@
+# general:
+#   enable_incomplete_verification: False
+general:
+    device: cuda #cuda
+model:
+  onnx_quirks: "{'Reshape': {'fix_batch_size': True}}"
+solver:
+  optimize_disjuncts_separately: True
+  crown:
+    batch_size: 256
+bab:
+  # initial_max_domains: 1
+  branching:
+    input_split:
+      enable: False
+attack:
+  pgd_order: before
+

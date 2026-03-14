@@ -1,0 +1,25 @@
+# general:
+#   enable_incomplete_verification: 
+# This is for 1 property at a time
+general:
+    device: cuda #cuda
+model:
+  onnx_quirks: "{'Reshape': {'fix_batch_size': True}}"
+solver:
+  optimize_disjuncts_separately: True
+  crown:
+    batch_size: 256
+bab:
+  # initial_max_domains: 1
+  branching:
+    input_split:
+      enable: False
+  cut:
+    enabled: True
+    bab_cut: true
+    number_cuts: 500
+    biccos:
+      enabled: true
+attack:
+  pgd_order: before
+

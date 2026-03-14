@@ -1,0 +1,20 @@
+# Configuration file for running the rl_benchmarks benchmark (dubins-rejoin model).
+general:
+  root_path: ../../vnncomp2022_benchmarks/benchmarks/rl_benchmarks
+  csv_name: instances.csv
+  loss_reduction_func: max
+  conv_mode: matrix
+data:
+  num_outputs: 8
+  start: 200
+  end: 300
+solver:
+  batch_size: 100  # Number of parallel domains to compute on GPU.
+  bound_prop_method: forward+backward
+bab:
+  branching:
+    method: sb
+    input_split:
+      enable: True
+attack:
+  pgd_order: input_bab
