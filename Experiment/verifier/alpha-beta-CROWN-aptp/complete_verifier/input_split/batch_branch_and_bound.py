@@ -41,7 +41,7 @@ def batch_verification_input_split(
         d, net, batch, num_iter, decision_thresh, shape=None,
         bounding_method="crown", branching_method="sb",
         stop_criterion=stop_criterion_batch_any, split_partitions=2,
-        use_reordered_bab=False, stats=None):
+        use_reordered_bab=False, stats=None, reasoning_domains=None):
     """
     General function of the batch_verification_input_split method.
 
@@ -121,6 +121,22 @@ def batch_verification_input_split(
 
     # --- Filter out verified subdomains --- #
     stats.timer.start('filtering')
+
+    # Add proofs
+    if reasoning_domains != None:
+        result_all_branches = (dm_lb <= thresholds).all(1)
+        indexer = result_all_branches.nonzero().view(-1) # True means unverified, False means verified
+        verified_branch_indexer = [ci for ci in range(len(dm_lb)) if ci not in indexer]
+
+        for l, u, curr_cs, curr_threshold in zip(x_L[verified_branch_indexer], x_U[verified_branch_indexer], cs[verified_branch_indexer], thresholds[verified_branch_indexer]):
+            found_rd = False
+            for rd in reasoning_domains:
+                if rd.is_match(curr_cs, curr_threshold):
+                    rd.proofs.append((l, u))
+                    found_rd = True
+                    break
+            assert found_rd, "Not match any property"
+
     # Since we have only bounded the domains and not clipped them, we only need to check thresholds
     ret_filt = UnsortedInputDomainList.filter_verified_domains(len(x_L), dm_lb, x_L, x_U,
                                         alphas, cs, thresholds, lA, lbias, constraints, spec_sizes = spec_sizes,
@@ -256,6 +272,7 @@ def input_bab_parallel(net: LiRPANet, x: BoundedTensor, c: Tensor, rhs: Tensor,
                        reference_dict:Optional[dict]=None,
                        timeout:Optional[float]=None, max_iterations: Optional[int]=None,
                        vnnlib=None, return_domains:bool=False, index: Optional[int] = None,
+                       reasoning_domains=None
                        ):
     """Run input split bab.
 
@@ -530,7 +547,7 @@ def input_bab_parallel(net: LiRPANet, x: BoundedTensor, c: Tensor, rhs: Tensor,
             num_iter=num_iter, decision_thresh=rhs, shape=x.shape,
             bounding_method=bounding_method, branching_method=branching_method,
             stop_criterion=stop_criterion, split_partitions=split_partitions,
-            use_reordered_bab=use_reordered_bab, stats=stats)
+            use_reordered_bab=use_reordered_bab, stats=stats, reasoning_domains=reasoning_domains)
         batch = check_auto_enlarge_batch_size(auto_batch_size)
 
 

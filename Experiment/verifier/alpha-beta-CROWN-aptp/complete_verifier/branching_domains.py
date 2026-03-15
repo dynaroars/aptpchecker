@@ -117,7 +117,6 @@ class BatchedDomainList(AbstractDomainList):
         self.all_betas = [beta for _ in range(num)]
         self.all_intermediate_betas = [None for _ in range(num)]
         self.histories = [fast_hist_copy(history) for _ in range(num)]
-        self.conflict_histories = [] # permanent log of verified domains
         self.split_histories = [[] for _ in range(num)]
         self.depths = [0] * num
         if arguments.Config['bab']['tree_traversal'] == 'breadth_first':
@@ -394,18 +393,27 @@ class BatchedDomainList(AbstractDomainList):
         indexer = indexer.nonzero().view(-1) # Index of unverified branch - still need to explored/split
 
         # histories = d['history'] => current batch being processed RIGHT NOW
-        # self.conflict_histories => permanent log of verified domains
         conflict_batch_indexer_lst = [ci for ci in range(batch) if ci not in indexer] # Index of current verified branch
+        assert len(conflict_batch_indexer_lst) + len(indexer) == batch
 
-        # When there are any verified branches (verification is completed with those branches), add it to the conflict_histories
+        # When there are any verified branches (verification is completed with those branches), add it to the reasoning_domains
         if len(conflict_batch_indexer_lst) > 0:
-            # Methods that get current verified branch and add it to the permanent log -- conflict_histories
+            # Methods that get current verified branch and add it to the permanent log -- reasoning_domains
             conflict_selector = (
                 operator.itemgetter(*conflict_batch_indexer_lst)
                 if len(conflict_batch_indexer_lst) > 1
                 else lambda _arr: (_arr[conflict_batch_indexer_lst[0]], ))
-            self.conflict_histories.extend(conflict_selector(histories))
-            assert len(conflict_batch_indexer_lst) + len(indexer) == batch
+            new_verified_branches = conflict_selector(histories)
+            verified_cs = bounds['c'][conflict_batch_indexer_lst]        # [num_verified, output_dim]
+            verified_thresholds = decision_threshs[conflict_batch_indexer_lst]   # [num_verified, num_specs]
+            for curr_cs, curr_threshold in zip(verified_cs, verified_thresholds):
+                found_rd = False
+                for rd in self.reasoning_domains:
+                    if rd.is_match(curr_cs, curr_threshold):
+                        rd.proofs.extend(new_verified_branches)
+                        found_rd = True
+                        break
+                assert found_rd, "Not match any property" 
 
         if len(indexer) == 0:
             return

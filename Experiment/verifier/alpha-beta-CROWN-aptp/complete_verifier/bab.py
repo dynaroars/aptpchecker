@@ -395,7 +395,8 @@ def history_to_clause(h: dict, name_mapping: dict) -> list:
 
 def general_bab(net: LiRPANet, x, c, rhs,
                 reference_dict=None,
-                timeout=None, max_iterations=None):
+                timeout=None, max_iterations=None,
+                reasoning_domains=None):
     # the crown_lower/upper_bounds are present for initializing the unstable
     # indx when constructing bounded module
     # it is ok to not pass them here, but then we need to go through a CROWN
@@ -532,6 +533,7 @@ def general_bab(net: LiRPANet, x, c, rhs,
 
     total_round = 0
     result = None
+    domains.reasoning_domains = reasoning_domains
     while (num_domains > 0 and (max_iterations == -1
                                 or total_round < max_iterations)):
         total_round += 1
@@ -580,12 +582,8 @@ def general_bab(net: LiRPANet, x, c, rhs,
         # No domains left and not timed out.
         result = 'safe'
 
-    print(f'Number of conlict nodes =', len(domains.conflict_histories))
-    print(f"{domains.conflict_histories=}")
-    print(f"{domains.var_mapping=}")
-    conflict_nodes = [history_to_clause(n, domains.var_mapping) for n in domains.conflict_histories]
-    print(f"{c=}")
-    print(f"{conflict_nodes=}")
+    for rd in reasoning_domains:
+        rd.proofs = [history_to_clause(n, domains.var_mapping) for n in rd.proofs]
     del domains
 
-    return global_lb.max(), stats.visited, result, stats, conflict_nodes
+    return global_lb.max(), stats.visited, result, stats

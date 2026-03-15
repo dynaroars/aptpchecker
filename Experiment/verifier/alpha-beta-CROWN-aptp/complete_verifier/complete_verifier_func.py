@@ -36,6 +36,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from abcrown import ABCROWN
 
+class ReasoningDomain:
+    def __init__(self, cs, rhs):
+        self.cs = cs.to("cpu")
+        self.rhs = rhs.to("cpu")
+        self.proofs = []
+
+    def __eq__(self, value):
+        return (torch.allclose(self.cs, value.cs.to("cpu"), atol=1e-5)
+            and torch.allclose(self.rhs, value.rhs.to("cpu"), atol=1e-5))
+
+    def is_match(self, cs, rhs):
+        return (torch.allclose(self.cs, cs.to("cpu"), atol=1e-5)
+            and torch.allclose(self.rhs, rhs.to("cpu"), atol=1e-5))
+
 def bab(self: 'ABCROWN',
         reference_dict=None,
         model=None,
@@ -87,7 +101,8 @@ def bab(self: 'ABCROWN',
             timeout=timeout, max_iterations=max_iterations,
             vnnlib=vnnlib,
             return_domains=return_domains,
-            index=index
+            index=index,
+            reasoning_domains=self.reasoning_domains
         )
         if return_domains:
             return result
@@ -102,7 +117,6 @@ def bab(self: 'ABCROWN',
         else:
             # otherwise, we can use the whole batch
             bab_batch_size = total_num_or_spec
-        bab_batch_size = 1 # Process one property at a time
         num_batches = (total_num_or_spec + bab_batch_size - 1) // bab_batch_size
 
         result = [float("inf"), 0, "safe"]
@@ -117,12 +131,13 @@ def bab(self: 'ABCROWN',
             batch_result = general_bab(
                 lirpa_model, batch_x, batch_c, batch_rhs,
                 reference_dict=batch_reference_dict,
-                timeout=timeout, max_iterations=max_iterations)
+                timeout=timeout, max_iterations=max_iterations,
+                reasoning_domains=self.reasoning_domains
+            )
 
             if cplex_cuts:
                 solved_c_list.append(batch_c)
                 terminate_mip_processes_by_c_matching(lirpa_model.processes, solved_c_list)
-            self.proofs[batch_idx] = batch_result[-1] # Add conflict_nodes to proofs
 
             batch_result = _format_result_act_bab(batch_result, lirpa_model, vnnlib)
 
@@ -162,8 +177,16 @@ def complete_verifier(
     print(f'Remaining timeout: {timeout}')
     start_time_bab = time.time()
 
+    device = arguments.Config['general']['device']
+    all_specs = self.vnnlib_handler.all_specs
+    x, c, rhs, or_spec_size, _, _ = all_specs.get(device)
+    data_min = self.vnnlib_handler.data_min[0:1].to(device)  # lower bounds
+    data_max = self.vnnlib_handler.data_max[0:1].to(device)  # upper bounds
+
     # Start tracking objectives
-    self.proofs = {}
+    self.reasoning_domains = [
+        ReasoningDomain(curr_cs, curr_rhs) for curr_cs, curr_rhs in zip(c, rhs)
+    ]
 
     # Complete verification (BaB, BaB with refine, or MIP).
     l, num_domains_visited, ret = self.bab(
@@ -173,34 +196,27 @@ def complete_verifier(
         index=index,
     )
 
-    device = arguments.Config['general']['device']
-    all_specs = self.vnnlib_handler.all_specs
-    x, c, rhs, or_spec_size, _, _ = all_specs.get(device)
-    data_min = self.vnnlib_handler.data_min[0:1].to(device)  # lower bounds
-    data_max = self.vnnlib_handler.data_max[0:1].to(device)  # upper bounds
-    print(f"{c.shape=}")
-    print(f"{data_min.shape=}")
-    print(f"{data_max.shape=}")
-    print(f"{or_spec_size.shape=}")
-    print(f"{rhs.shape=}")
+    proof_folder = arguments.Config['general']['reasoning_output']
 
     # Produce APTP
-    if ret == 'safe':
+    if ret == 'safe' and proof_folder:
         total_num_or_spec = c.shape[0]
         proof_folder = arguments.Config['general']['reasoning_output']
         os.makedirs(proof_folder, exist_ok=True)
+        input_split = arguments.Config['bab']['branching']['input_split']['enable']
 
         # Export APTP file
         for property_idx in range(total_num_or_spec):
-            conflict_nodes = self.proofs[property_idx]
-            aptp = create_aptp(
-                proof=conflict_nodes,
-                input_lower=data_min.flatten(),
-                input_upper=data_max.flatten(),
-                cnf_cs=c[property_idx],
-                cnf_rhs=rhs[property_idx],
-                input_split=False
-            )
+            rd: ReasoningDomain = self.reasoning_domains[property_idx]
+            if len(rd.proofs) > 0:
+                aptp = create_aptp(
+                    proof=rd.proofs,
+                    input_lower=data_min.flatten(),
+                    input_upper=data_max.flatten(),
+                    cnf_cs=rd.cs,
+                    cnf_rhs=rd.rhs,
+                    input_split=input_split
+                )
 
             proof_file = os.path.join(proof_folder, f"proof_{property_idx}.aptp")
             with open(proof_file, "w") as f:

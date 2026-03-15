@@ -1,3 +1,5 @@
+general:
+    device: cuda
 model:
   onnx_quirks: "{'Reshape': {'fix_batch_size': True}}"
 solver:

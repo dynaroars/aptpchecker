@@ -1,11 +1,8 @@
-# general:
-#   enable_incomplete_verification: False
 general:
     device: cuda #cuda
 model:
   onnx_quirks: "{'Reshape': {'fix_batch_size': True}}"
 solver:
-  optimize_disjuncts_separately: True
   crown:
     batch_size: 256
 bab:
