@@ -27,6 +27,7 @@ def main():
                         help="path to result file")
     
     args = parser.parse_args()   
+    timeout = args.timeout
     
     if args.result_file:
         if os.path.exists(args.result_file):
@@ -41,7 +42,9 @@ def main():
     
     while len(objectives):
         objective = objectives.pop(1)
-        print(f'Extract ONNX and APTP in {time.time() - START_TIME:.04f} seconds')
+        runtime = time.time() - START_TIME
+
+        print(f'Extract ONNX and APTP in {runtime:.04f} seconds')
         
         proof_checker = ProofChecker(
             net=net, 
@@ -49,11 +52,14 @@ def main():
             objective=objective, 
             verbose=False
         ) 
-        
+
+        if runtime > timeout:
+            return ProofReturnStatus.TIMEOUT 
+
         status = proof_checker.prove(
             proof=proof, 
             batch=args.batch, 
-            timeout=args.timeout,
+            timeout=timeout - runtime,
         )
         
         if status != ProofReturnStatus.CERTIFIED:

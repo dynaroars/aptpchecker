@@ -19,6 +19,11 @@ ALLOWED_GUROBI_STATUS_CODES = [
     grb.GRB.INF_OR_UNBD, # TODO: investigate this
 ]
 
+UNSAT_GUROBI_STATUS_CODES = [
+    grb.GRB.INFEASIBLE,
+    grb.GRB.USER_OBJ_LIMIT,
+]
+
 def get_model_params(model):
     total_params = sum(p.numel() for p in model.parameters())
     print(f'{total_params = }')
@@ -28,7 +33,6 @@ def _proof_worker_impl(candidate):
     can_node, _, can_var_mapping = candidate
     start_solve_time = time.time()
     can_model = MULTIPROCESS_MODEL.copy()
-    assert can_model.ModelSense == grb.GRB.MINIMIZE
     assert can_model.Params.BestBdStop > 0
     can_model.update()
     
@@ -61,19 +65,13 @@ def _proof_worker_impl(candidate):
     print(f'[+] Solved leaf: {can_node = } in {time.time() - start_solve_time} seconds, {can_model.NumVars=}, {can_model.NumConstrs=} {can_model.status=}')
         
     assert can_model.status in ALLOWED_GUROBI_STATUS_CODES, f'[!] Error: {can_model=} {can_model.status=} {can_node.history=}'
-    if can_model.status == grb.GRB.USER_OBJ_LIMIT: # early stop
-        return 1e-5
-    if can_model.status in [grb.GRB.INFEASIBLE, grb.GRB.INF_OR_UNBD]: # infeasible
-        return float('inf')
-    if can_model.status == grb.GRB.TIME_LIMIT: # timeout
-        return can_model.ObjBound
-    return can_model.objval
+
+    return can_model.status in UNSAT_GUROBI_STATUS_CODES
     
     
 def _proof_worker_node(candidate):
     global MULTIPROCESS_MODEL
-    obj_val = _proof_worker_impl(candidate)
-    is_solved = obj_val > 0
+    is_solved = _proof_worker_impl(candidate)
     return is_solved, candidate[0]
     
 class ProofChecker:
@@ -100,7 +98,6 @@ class ProofChecker:
     
     def build_core_checker(self, objective, timeout_per_neuron=15.0):
         c_to_use = objective.cs
-        assert c_to_use.shape[0] == c_to_use.shape[1] == 1, f'Unsupported shape {c_to_use.shape=}'
         tic = time.time()
         self.abs_net.build_solver_module(
             x_L=objective.lower_bounds.view(self.input_shape),
@@ -111,12 +108,13 @@ class ProofChecker:
         print(f'[+] Build coresolver time: {time.time() - tic=}')
         return self.abs_net.solver_model
         
-    def set_objective(self, model, objective):
+    def set_objective(self, model: grb.Model, objective):
         new_model = model.copy()
-        assert objective.rhs.numel() == self.abs_net.final_node().solver_vars.size == 1
-        output_var = self.abs_net.final_node().solver_vars.item()
-        objective_var = new_model.getVarByName(output_var.VarName) - objective.rhs.item()
-        new_model.setObjective(objective_var, grb.GRB.MINIMIZE)
+
+        # Only 1 dnf
+        assert objective.rhs.shape[0] == self.abs_net.final_node().solver_vars.shape[0] == 1
+        for curr_obj, rhs in zip(self.abs_net.final_node().solver_vars[0], objective.rhs[0]):
+            new_model.addConstr(new_model.getVarByName(curr_obj.VarName) - rhs <= 0)
         new_model.update()
         return new_model
     
