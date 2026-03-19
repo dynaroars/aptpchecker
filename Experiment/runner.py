@@ -1,6 +1,7 @@
 import torch
 import tqdm
 import os
+import time
 
 from utils import get_total_instances, get_benchmark_list
 from verifier import neuralsat, abcrown, marabou
@@ -10,10 +11,10 @@ APTP_TIMEOUT = 1000
 
 def run_aptp(onnx_path, aptp_path, result_file, log_file, timeout=1000):
     if os.path.exists(result_file):
-        status, time = open(result_file).read().strip().split(',')
+        status, runtime = open(result_file).read().strip().split(',')
 
         # Rerun the error proof that don't get timeout
-        if float(time) >= timeout - 10:
+        if float(runtime) >= timeout - 10:
             return status
 
     cmd  = f'timeout {timeout}s python3 ../main.py'
