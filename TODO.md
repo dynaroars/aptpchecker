@@ -14,3 +14,11 @@
 * [ ] Add proof for input split
 * [ ] Run benchmark with hidden split
 * [ ] Run benchmark with input split
+
+## Benchmark list:
+* [ ] acasxu
+* [ ] safenlp
+* [ ] cora
+* [ ] tllverifybench
+* [ ] cersyve
+* [ ] sat_relu

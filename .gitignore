@@ -1,3 +1,8 @@
+# Ignore benchmarks
+**/cersyve
+**/cora
+**/tllverifybench
+
 .vscode/
 vnncomp2025_benchmarks/
 old/

@@ -21,6 +21,7 @@ def verify(args, onnx_path, vnnlib_path, output_path, timeout):
     cmd += f' --onnx_path {onnx_path} --vnnlib_path {vnnlib_path} --timeout {timeout}'
     cmd += f' --results_file {result_path}'
     cmd += f' --config {setting_path}'
+    cmd += f' --reasoning_output {output_path}'
     cmd += f' > {log_path} 2>&1'
 
     tic = time.time()
