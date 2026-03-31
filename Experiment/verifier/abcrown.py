@@ -17,7 +17,7 @@ def verify(args, onnx_path, vnnlib_path, output_path, timeout):
     
     assert os.path.exists(setting_path), f"Setting file does not exist: {setting_path=}"
     
-    cmd  = f'python3 -W ignore abcrown.py'
+    cmd  = f'timeout {timeout}s python3 -W ignore abcrown.py'
     cmd += f' --onnx_path {onnx_path} --vnnlib_path {vnnlib_path} --timeout {timeout}'
     cmd += f' --results_file {result_path}'
     cmd += f' --config {setting_path}'

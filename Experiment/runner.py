@@ -9,13 +9,17 @@ from argument import parse_args
 
 APTP_TIMEOUT = 1000
 
-def run_aptp(onnx_path, aptp_path, result_file, log_file, timeout=1000):
+def run_aptp(onnx_path, aptp_path, result_file, log_file, timeout=1000, rerun=False):
     if os.path.exists(result_file):
         status, runtime = open(result_file).read().strip().split(',')
 
-        # Rerun the error proof that don't get timeout
-        if float(runtime) >= timeout - 10:
+        if not rerun:
             return status
+
+        # Rerun the error proof that don't get timeout
+        if status == "certified" or float(runtime) >= timeout - 5:
+            return status
+        os.remove(result_file)
 
     cmd  = f'timeout {timeout}s python3 ../main.py'
     cmd += f' --onnx {onnx_path}'
@@ -79,10 +83,18 @@ def main():
         benchmark_dir = os.path.join(args.benchmark_dir, benchmark)
         instances_file = os.path.join(benchmark_dir, 'instances.csv')
         assert os.path.exists(instances_file), f"Instances file does not exist: {instances_file=}"
-        
+
         with open(instances_file, 'r') as f:
             instances = f.readlines()
-        
+        stat_benchmark = {
+            'sat': 0,
+            'unsat': 0,
+            'timeout': 0,
+            'error': 0,
+            'certified': 0,
+            'not_certified': 0
+        }
+
         for instance in instances:
             onnx, vnnlib, _ = instance.strip().split(',')
             onnx_path = os.path.abspath(os.path.join(benchmark_dir, onnx))
@@ -102,8 +114,10 @@ def main():
                     print("No proof")
                 else:
                     for aptp in aptp_files:
-                        assert aptp.endswith("aptp") or aptp.endswith("proof_result")
-                        if aptp.endswith("proof_result"):
+                        assert (aptp.endswith("aptp")
+                            or aptp.endswith("proof_result")
+                            or aptp.endswith("log"))
+                        if not aptp.endswith("aptp"):
                             continue
 
                         res_file = aptp.split(".aptp")[0] + ".proof_result"
@@ -113,7 +127,8 @@ def main():
                             aptp_path=aptp,
                             result_file=res_file,
                             log_file=log_file,
-                            timeout=APTP_TIMEOUT
+                            timeout=APTP_TIMEOUT,
+                            rerun=False
                         )
                         if proof_status != "certified":
                             certified = False
@@ -122,19 +137,27 @@ def main():
                 proof_result = output_path + ".proof_result"
                 if certified:
                     stats_proof['certified'] += 1
+                    stat_benchmark['certified'] += 1
                     with open(proof_result, 'w') as f:
                         print(f'certified', file=f)
                 else:
                     stats_proof['not_certified'] += 1
+                    stat_benchmark['not_certified'] += 1
                     with open(proof_result, 'w') as f:
                         print(f'uncertified', file=f)
 
             stats[status] += 1
+            stat_benchmark[status] += 1
             pbar.update(1)
             pbar.set_postfix(**stats)
+            pbar.set_postfix(**stats_proof)
             # exit()
         
         # print()
+        with open(os.path.join(output_dir, "result.csv"), "w") as f:
+            f.write("Status\tCount\t\n")
+            for stat, count in stat_benchmark.items():
+                f.write(f"{stat}\t{count}\t\n")
         print(stats_proof)
 
 if __name__ == "__main__":

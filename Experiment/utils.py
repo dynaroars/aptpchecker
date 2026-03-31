@@ -10,11 +10,16 @@ import os
 BENCHMARK_CONFIG = {
     'input': [
         'acasxu',
-        'sat_relu',
+        # 'cersyve',
+        'cora',
         'safenlp',
-           
+        'sat_relu',
+        'tllverifybench'
     ],
     'hidden': [
+        'acasxu',
+        'cora',
+        'tllverifybench',
         'fnn_small',
         'fnn_medium',
         'cnn_small',
