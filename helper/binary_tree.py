@@ -88,6 +88,9 @@ class Group:
             left.val = f"X_{self.split_index}\n({l}, {m})"
             right.val = f"X_{self.split_index}\n({m}, {u})"
 
+        self.print_all()
+        print("ok now")
+        self.print(splits)
         assert n > 0 and n % 2 == 0
         new_splits = [combine(splits[i], splits[i+1], self.split_index) for i in range(0, n, 2)]
         return self._convert_node(new_splits)
@@ -96,7 +99,7 @@ class Group:
         return self._convert_node(self.splits)
 
     def print(self, s):
-        print("Splits:")
+        print(f"Splits: {self.split_index=}")
         for i, split in enumerate(s):
             print(f"Input {i}: {split.lower_bound=}")
             print(f"Input {i}: {split.upper_bound=}\n")
@@ -116,11 +119,22 @@ class BinaryTree:
             self.build_input()
 
     @property
-    def width(self):
-        return 0
+    def num_nodes(self):
+        def dfs(node: Node):
+            if not node:
+                return 0
+
+            return dfs(node.left) + dfs(node.right) + 1
+
+        return dfs(self.root)
 
     @property
-    def height(self):
+    def width(self):
+        max_width = 0
+        return max_width
+
+    @property
+    def depth(self):
         def dfs(node: Node):
             if not node:
                 return 0
@@ -170,7 +184,7 @@ class BinaryTree:
         self.root = self.process(nodes)
 
     @property
-    def node_count(self):
+    def num_hidden_proof(self):
         count = dict()
         for proof_step in self.proof_tree:
             for n in proof_step:
@@ -180,7 +194,7 @@ class BinaryTree:
 
     def build_hidden(self):
         for proof_step in self.proof_tree:
-            proof_step = sorted(proof_step, key=lambda x: self.node_count[abs(x)], reverse=True)
+            proof_step = sorted(proof_step, key=lambda x: self.num_hidden_proof[abs(x)], reverse=True)
             self.process_hidden_list(proof_step)
 
     def process_hidden_list(self, neurons):
