@@ -187,7 +187,7 @@ def finalizeBoxStep (lo hi : Array (Option ℚ)) (acc : Except String (Array (�
 
 /-- Parse a `.aptp` file into a `Problem`. -/
 def parseAptp (content : String) : Except String Problem := do
-  let raw ← readStatements content
+  let raw ← readStatementsFold content
   let sexps ← raw.toList.foldl parseAllStep (.ok #[])
   let (maxIn, maxOut, neurons) ← sexps.toList.foldl scanDeclsStep (.ok (-1, -1, #[]))
   let numInputs := (maxIn + 1).toNat

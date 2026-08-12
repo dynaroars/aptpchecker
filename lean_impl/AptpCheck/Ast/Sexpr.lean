@@ -53,6 +53,34 @@ def readStatements (content : String) : Except String (Array (List Char)) := Id.
     stmts := stmts.push cur
   return .ok stmts
 
+/-- Fold step for `readStatementsFold`; the accumulator is
+`(bal, stmts, cur)` (running paren balance, finished statements, current
+partial statement), short-circuiting on a paren-balance error. -/
+def readStmtStep (acc : Except String (Int × Array (List Char) × List Char))
+    (rawLine : List Char) : Except String (Int × Array (List Char) × List Char) :=
+  match acc with
+  | .error e => .error e
+  | .ok (bal, stmts, cur) =>
+    let line := rtrim (beforeSemicolon (trimC rawLine))
+    if line.isEmpty then .ok (bal, stmts, cur)
+    else
+      let bal' := bal + (line.countP (· == '(') : Int) - (line.countP (· == ')') : Int)
+      if bal' < 0 then .error "mismatched parenthesis"
+      else
+        let cur' := if cur.isEmpty then line else cur ++ (' ' :: line)
+        if bal' == 0 then .ok (bal', stmts.push cur', [])
+        else .ok (bal', stmts, cur')
+
+/-- Total `List.foldl`-based reimplementation of `readStatements` with **identical
+behaviour** (each fold step threads `(bal, stmts, cur)` through the accumulator and
+short-circuits on error, exactly as the `Id.run do` loop did). Used by `parseAptp`
+so the statement reader has equational lemmas for the faithfulness proofs;
+`readStatements` itself is left intact for `.net`. -/
+def readStatementsFold (content : String) : Except String (Array (List Char)) :=
+  match (splitOnChar '\n' content.toList).foldl readStmtStep (.ok (0, #[], [])) with
+  | .error e => .error e
+  | .ok (_, stmts, cur) => .ok (if cur.isEmpty then stmts else stmts.push cur)
+
 /-- An S-expression: an atom or a list. -/
 inductive Sexp where
   | atom (s : String)
