@@ -609,4 +609,76 @@ theorem mkLeaf_leafClause (L : List Int) (hL : ∀ k ∈ L, k ≠ 0) :
   rw [mkLeaf_foldl L hL #[]]
   simp
 
+/-! ## Statement reader round-trip (`readStatementsFold_multi`)
+
+Generalizes `NetRoundtrip.readStatements_single` to many statements: statements
+printed one-per-line (each followed by `'\n'`) are read back as exactly that list.
+Proved against the fold-based `readStatementsFold` (which `parseAptp` uses). -/
+
+/-- Statements joined with a trailing newline each. -/
+def joinNL (lines : List (List Char)) : List Char := lines.flatMap (fun s => s ++ ['\n'])
+
+/-- A clean, balanced, newline-free, nonempty statement line — exactly the shape a
+printed S-expression statement has. -/
+def CleanBalLine (l : List Char) : Prop :=
+  '\n' ∉ l ∧ rtrim (beforeSemicolon (trimC l)) = l ∧ l ≠ [] ∧
+  l.countP (· == '(') = l.countP (· == ')')
+
+lemma splitOnChar_joinNL (lines : List (List Char)) (hnl : ∀ l ∈ lines, '\n' ∉ l) :
+    splitOnChar '\n' (joinNL lines) = lines ++ [[]] := by
+  induction lines with
+  | nil => rfl
+  | cons s ss ih =>
+    have hs : '\n' ∉ s := hnl s (List.mem_cons_self ..)
+    have hss : ∀ l ∈ ss, '\n' ∉ l := fun l hl => hnl l (List.mem_cons_of_mem _ hl)
+    have hjoin : joinNL (s :: ss) = s ++ '\n' :: joinNL ss := by
+      simp [joinNL, List.flatMap_cons]
+    rw [hjoin, splitOnChar_one_sep '\n' s (joinNL ss) hs, ih hss]
+    rfl
+
+/-- The empty line is a no-op for the statement-reader fold step. -/
+lemma readStmtStep_nil (acc : Except String (Int × Array (List Char) × List Char)) :
+    readStmtStep acc [] = acc := by
+  cases acc with
+  | error e => rfl
+  | ok st =>
+    obtain ⟨bal, stmts, cur⟩ := st
+    unfold readStmtStep
+    simp [trimC, ltrim, rtrim, beforeSemicolon]
+
+/-- A clean balanced line (with balance already `0`) is pushed as a complete statement. -/
+lemma readStmtStep_clean (stmts : Array (List Char)) (l : List Char) (hc : CleanBalLine l) :
+    readStmtStep (.ok (0, stmts, [])) l = .ok (0, stmts.push l, []) := by
+  obtain ⟨hnl, hclean, hne, hbal⟩ := hc
+  have hemp : l.isEmpty = false := by simpa using hne
+  have h2 : (l.countP (· == '(') : Int) = (l.countP (· == ')') : Int) := by exact_mod_cast hbal
+  unfold readStmtStep
+  simp [hclean, hemp, h2]
+
+/-- Folding the reader step over clean balanced lines accumulates them in order. -/
+lemma readStmtStep_fold (lines : List (List Char)) (hc : ∀ l ∈ lines, CleanBalLine l) :
+    ∀ (stmts : Array (List Char)),
+      lines.foldl readStmtStep (.ok (0, stmts, [])) = .ok (0, stmts ++ lines.toArray, []) := by
+  induction lines with
+  | nil => intro stmts; simp
+  | cons l ls ih =>
+    intro stmts
+    have hl : CleanBalLine l := hc l (List.mem_cons_self ..)
+    have hls : ∀ x ∈ ls, CleanBalLine x := fun x hx => hc x (List.mem_cons_of_mem _ hx)
+    rw [List.foldl_cons, readStmtStep_clean stmts l hl, ih hls (stmts.push l)]
+    have harr : stmts.push l ++ ls.toArray = stmts ++ (l :: ls).toArray := by
+      apply Array.toList_inj.mp; simp
+    rw [harr]
+
+/-- **Multi-statement reader round-trip.** Content that is a newline-terminated join
+of clean balanced statement lines is read back as exactly those statements. -/
+theorem readStatementsFold_multi (lines : List (List Char)) (content : String)
+    (hc : ∀ l ∈ lines, CleanBalLine l) (hcontent : content.toList = joinNL lines) :
+    readStatementsFold content = .ok lines.toArray := by
+  have hnl : ∀ l ∈ lines, '\n' ∉ l := fun l hl => (hc l hl).1
+  unfold readStatementsFold
+  rw [hcontent, splitOnChar_joinNL lines hnl, List.foldl_append,
+    readStmtStep_fold lines hc #[], List.foldl_cons, List.foldl_nil, readStmtStep_nil]
+  simp
+
 end AptpCheck.Ast.AptpRoundtrip
