@@ -331,4 +331,200 @@ theorem parseStatement_stmtChars (e : Sexp) (hwf : WF e) :
   unfold parseStatement
   rw [htok, parseSexp_sexpToks e (WF.toWFSexp e hwf)]
 
+/-! ## Exact decimals: `parseRat?` inverts a canonical decimal printer
+
+`box` bounds and objective RHS values are `ℚ` read by `parseRat?` from finite
+decimals; arbitrary `ℚ` (e.g. `1/3`) is not printable. Following the `.net`
+"carry the raw source form" trick, we carry each number as a `RawDec` (sign +
+decimal digit lists) and prove `parseRat?` recovers its exact value. -/
+
+/-- Total decimal fold (matches `natOfDigits?` on valid digit lists). -/
+def natFromDigits (l : List Char) : Nat :=
+  l.foldl (fun acc c => acc * 10 + (c.toNat - '0'.toNat)) 0
+
+lemma natOfDigits_allDigit (l : List Char) (h : ∀ c ∈ l, c.isDigit) :
+    natOfDigits? l = some (natFromDigits l) := by
+  unfold natOfDigits? natFromDigits
+  suffices H : ∀ (start : Nat),
+      l.foldl (fun acc c => match acc with
+        | some n => if c.isDigit then some (n * 10 + (c.toNat - '0'.toNat)) else none
+        | none => none) (some start)
+        = some (l.foldl (fun acc c => acc * 10 + (c.toNat - '0'.toNat)) start) by
+    exact H 0
+  induction l with
+  | nil => intro start; rfl
+  | cons c cs ih =>
+    intro start
+    have hc : c.isDigit := h c (List.mem_cons_self ..)
+    have hcs : ∀ x ∈ cs, x.isDigit := fun x hx => h x (List.mem_cons_of_mem _ hx)
+    simp only [List.foldl_cons, hc, if_true]
+    exact ih hcs (start * 10 + (c.toNat - '0'.toNat))
+
+lemma splitOnChar_no_sep' (sep : Char) (l : List Char) (h : sep ∉ l) :
+    splitOnChar sep l = [l] := by
+  induction l with
+  | nil => rfl
+  | cons c cs ih =>
+    have hc : c ≠ sep := by simp at h; tauto
+    have hcs : sep ∉ cs := by simp at h ⊢; tauto
+    unfold splitOnChar
+    simp only [beq_iff_eq, hc, ih hcs]
+    rfl
+
+lemma splitOnChar_one_sep (sep : Char) (l1 l2 : List Char) (h : sep ∉ l1) :
+    splitOnChar sep (l1 ++ sep :: l2) = l1 :: splitOnChar sep l2 := by
+  induction l1 with
+  | nil =>
+    conv_lhs => rw [List.nil_append]; unfold splitOnChar
+    simp
+  | cons c cs ih =>
+    have hc : c ≠ sep := by simp at h; tauto
+    have hcs : sep ∉ cs := by simp at h ⊢; tauto
+    conv_lhs => rw [List.cons_append]; unfold splitOnChar
+    rw [ih hcs]
+    simp [hc]
+
+lemma allDigit_notMem_dot (l : List Char) (h : ∀ c ∈ l, c.isDigit) : '.' ∉ l := by
+  intro hm; have := h '.' hm; simp at this
+
+lemma isDigit_ne_underscore {c : Char} (h : c.isDigit) : c ≠ '_' := by
+  intro he; subst he; simp at h
+
+/-- A raw decimal literal: sign and decimal digit lists for integer/fraction. -/
+structure RawDec where
+  neg : Bool
+  intDigits : List Char
+  fracDigits : List Char
+
+/-- The exact rational the decimal denotes. -/
+def RawDec.value (d : RawDec) : ℚ :=
+  let q : ℚ := (natFromDigits d.intDigits : ℚ)
+             + (natFromDigits d.fracDigits : ℚ) / (10 : ℚ) ^ d.fracDigits.length
+  if d.neg then -q else q
+
+/-- Canonical decimal characters, always carrying an explicit sign. -/
+def RawDec.chars (d : RawDec) : List Char :=
+  (if d.neg then '-' else '+') :: d.intDigits
+    ++ (if d.fracDigits.isEmpty then [] else '.' :: d.fracDigits)
+
+/-- Well-formed raw decimal: nonempty integer part, all decimal digits. -/
+def RawDec.WF (d : RawDec) : Prop :=
+  (d.intDigits ≠ [] ∧ ∀ c ∈ d.intDigits, c.isDigit) ∧ (∀ c ∈ d.fracDigits, c.isDigit)
+
+set_option linter.unusedSimpArgs false in
+/-- **`parseRat?` inverts the canonical decimal printer.** -/
+theorem parseRat_RawDec (d : RawDec) (hwf : d.WF) :
+    parseRat? (String.ofList d.chars) = some d.value := by
+  obtain ⟨neg, intD, fracD⟩ := d
+  obtain ⟨⟨hine, hidig⟩, hfdig⟩ := hwf
+  have hidot : '.' ∉ intD := allDigit_notMem_dot _ hidig
+  have hfdot : '.' ∉ fracD := allDigit_notMem_dot _ hfdig
+  have hni : natOfDigits? intD = some (natFromDigits intD) := natOfDigits_allDigit _ hidig
+  have hnf : natOfDigits? fracD = some (natFromDigits fracD) := natOfDigits_allDigit _ hfdig
+  cases fracD with
+  | nil =>
+    have hsplit : splitOnChar '.' intD = [intD] := splitOnChar_no_sep' '.' intD hidot
+    cases neg with
+    | true =>
+      simp only [RawDec.chars, RawDec.value, if_true, if_false, Bool.false_eq_true,
+        List.isEmpty_nil, List.isEmpty_cons, List.append_nil]
+      unfold parseRat?
+      rw [String.toList_ofList]
+      simp only [List.cons_append]
+      rw [hsplit]
+      simp [natFromDigits, hni]
+    | false =>
+      simp only [RawDec.chars, RawDec.value, if_true, if_false, Bool.false_eq_true,
+        List.isEmpty_nil, List.isEmpty_cons, List.append_nil]
+      unfold parseRat?
+      rw [String.toList_ofList]
+      simp only [List.cons_append]
+      rw [hsplit]
+      simp [natFromDigits, hni]
+  | cons g gs =>
+    have hsplit : splitOnChar '.' (intD ++ '.' :: g :: gs) = [intD, g :: gs] := by
+      rw [splitOnChar_one_sep '.' intD (g :: gs) hidot, splitOnChar_no_sep' '.' (g :: gs) hfdot]
+    cases neg with
+    | true =>
+      simp only [RawDec.chars, RawDec.value, if_true, if_false, Bool.false_eq_true,
+        List.isEmpty_nil, List.isEmpty_cons, List.append_nil]
+      unfold parseRat?
+      rw [String.toList_ofList]
+      simp only [List.cons_append]
+      rw [hsplit]
+      simp only [hni, hnf, if_true, if_false, Bool.false_eq_true]
+    | false =>
+      simp only [RawDec.chars, RawDec.value, if_true, if_false, Bool.false_eq_true,
+        List.isEmpty_nil, List.isEmpty_cons, List.append_nil]
+      unfold parseRat?
+      rw [String.toList_ofList]
+      simp only [List.cons_append]
+      rw [hsplit]
+      simp only [hni, hnf, if_true, if_false, Bool.false_eq_true]
+
+/-! ## Per-construct round-trips (pure helper functions)
+
+The parser's per-statement analysers are pure functions; we round-trip each
+against a canonical printer. (The two `Id.run do` `for`-loop passes of
+`parseAptp` itself, which merge box bounds and collect leaves, are not yet
+assembled — see the module note.) -/
+
+/-- Printed characters of a variable name `P_n`. -/
+def varNameChars (p : Char) (n : Nat) : List Char := p :: '_' :: natToDigits n
+
+/-- `parseVarName` recovers a printed variable name. -/
+theorem parseVarName_print (p : Char) (n : Nat) :
+    parseVarName (String.ofList (varNameChars p n)) = some (p, n) := by
+  unfold parseVarName varNameChars
+  rw [String.toList_ofList]
+  simp only [natOfDigits_natToDigits, Option.map_some]
+
+/-- A printed input-box constraint `(op X_i <dec>)` parses to the box update. -/
+theorem asBoxUpdate_print (op : String) (i : Nat) (d : RawDec) (hd : d.WF) :
+    asBoxUpdate op (String.ofList (varNameChars 'X' i)) (String.ofList d.chars)
+      = some (i, op == "<=", d.value) := by
+  unfold asBoxUpdate
+  rw [parseVarName_print, parseRat_RawDec d hd]
+  simp
+
+lemma parseVarName_snd_ne (a c0 : Char) (rest : List Char) (h : c0 ≠ '_') :
+    parseVarName (String.ofList (a :: c0 :: rest)) = none := by
+  unfold parseVarName
+  rw [String.toList_ofList]
+  split <;> simp_all
+
+/-- A decimal literal is not a variable name (its second char is a digit). -/
+theorem parseVarName_dec_none (d : RawDec) (hd : d.WF) :
+    parseVarName (String.ofList d.chars) = none := by
+  obtain ⟨neg, intD, fracD⟩ := d
+  obtain ⟨⟨hine, hidig⟩, _⟩ := hd
+  obtain ⟨c0, rest0, hc0eq⟩ : ∃ c0 rest0, intD = c0 :: rest0 := by
+    cases h : intD with
+    | nil => exact absurd h hine
+    | cons a l => exact ⟨a, l, rfl⟩
+  have hc0 : c0.isDigit := hidig c0 (hc0eq ▸ List.mem_cons_self ..)
+  have hchars : RawDec.chars ⟨neg, intD, fracD⟩
+      = (if neg then '-' else '+') :: c0 :: (rest0 ++ (if fracD.isEmpty then [] else '.' :: fracD)) := by
+    simp only [RawDec.chars, hc0eq, List.cons_append]
+  rw [hchars]
+  exact parseVarName_snd_ne _ c0 _ (isDigit_ne_underscore hc0)
+
+/-- A printed objective `(<= Y_i Y_j)` (difference of two output vars). -/
+theorem asObjective_print_YY (numOut : Nat) (i j : Nat) :
+    asObjective numOut "<=" (String.ofList (varNameChars 'Y' i)) (String.ofList (varNameChars 'Y' j))
+      = some { c := ((List.replicate numOut (0:ℚ)).toArray.set! i 1).set! j (-1), rhs := 0 } := by
+  unfold asObjective
+  simp only [show ("<=" == ">=") = false from by decide, Bool.false_eq_true, if_false]
+  rw [parseVarName_print, parseVarName_print]
+  rfl
+
+/-- A printed objective `(<= Y_i <dec>)` (single-output upper bound). -/
+theorem asObjective_print_Yub (numOut : Nat) (i : Nat) (d : RawDec) (hd : d.WF) :
+    asObjective numOut "<=" (String.ofList (varNameChars 'Y' i)) (String.ofList d.chars)
+      = some { c := (List.replicate numOut (0:ℚ)).toArray.set! i 1, rhs := d.value } := by
+  unfold asObjective
+  simp only [show ("<=" == ">=") = false from by decide, Bool.false_eq_true, if_false]
+  rw [parseVarName_print, parseVarName_dec_none d hd, parseRat_RawDec d hd]
+  simp
+
 end AptpCheck.Ast.AptpRoundtrip
