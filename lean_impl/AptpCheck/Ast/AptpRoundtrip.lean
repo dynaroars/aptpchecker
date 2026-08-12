@@ -22,6 +22,19 @@ Main results (all axiom-clean: `propext`, `Classical.choice`, `Quot.sound`):
 * `parseStatement_stmtChars` — **statement round-trip**: `parseStatement` applied to
                              the printed character form of a well-formed S-expression
                              returns exactly that S-expression.
+* `parseRat_RawDec`        — `parseRat?` inverts a canonical decimal printer (numbers
+                             carried as a `RawDec` = sign + decimal digit lists, to
+                             sidestep the `ℚ`-representability gap).
+* `parseVarName_print`, `asBoxUpdate_print`, `asObjective_print_YY`/`_Yub` — the
+                             per-statement analyser functions round-trip against a
+                             canonical printer for `declare`/box/output constraints.
+
+Not yet assembled: the two `Id.run do` `for`-loop passes of `parseAptp` (which
+merge box bounds via min/max and collect the DNF leaves), the `mkLeaf` clause loop
+(also a `for`-loop with early returns), and the multi-line `readStatements`
+reader. Completing the end-to-end `parseAptp (printAptp p) = .ok (decode p)`
+requires characterizing those `forIn` loops as folds; the per-construct lemmas
+above are the reusable pieces for that assembly.
 -/
 
 namespace AptpCheck.Ast.AptpRoundtrip
