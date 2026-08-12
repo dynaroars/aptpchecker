@@ -1,0 +1,11 @@
+# Lake build artifacts and fetched packages (huge — never commit)
+/.lake/
+# macOS cruft
+.DS_Store
+# LaTeX build products
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/*.bbl
+paper/*.blg

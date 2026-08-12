@@ -1,0 +1,19 @@
+; Input variables
+(declare-const X_0 X_1 Real)
+; Output variables
+(declare-const Y_0 Y_1 Real)
+; Hidden variables
+(declare-pwl N_1 N_2 N_3 N_4 ReLU)
+; Input constraints
+(assert (>= X_0 -2.0))
+(assert (<= X_0  2.0))
+(assert (>= X_1 -1.0))
+(assert (<= X_1  1.0))
+; Output constraints
+(assert (<= Y_0 Y_1))
+; Hidden constraints
+(assert (or
+    (and (<  N_4 0))
+    (and (<  N_2 0) (>= N_4 0))
+    (and (>= N_2 0) (>= N_1 0) (>= N_4 0))
+    (and (>= N_2 0) (<  N_1 0) (>= N_4 0))))

@@ -1,0 +1,23 @@
+name = "AptpCheck"
+defaultTargets = ["AptpCheck", "aptpcheck"]
+
+# A Lean 4 reimplementation of the APTPchecker DNN-verification proof checker.
+# Exact rational (ℚ) arithmetic throughout; SCIP is an untrusted oracle whose
+# VIPR certificate is re-checked in Lean. See DESIGN.md.
+
+[leanOptions]
+pp.unicode.fun = true          # pretty-print `fun a ↦ b`
+autoImplicit = false           # no accidental auto-bound implicits in proof code
+relaxedAutoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
+
+[[lean_lib]]
+name = "AptpCheck"
+
+[[lean_exe]]
+name = "aptpcheck"
+root = "Main"

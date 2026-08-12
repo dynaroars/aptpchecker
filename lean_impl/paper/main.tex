@@ -1,0 +1,728 @@
+% CAV submission — Springer LNCS format.
+% Requires llncs.cls (Springer's LNCS class) and splncs04.bst.
+% Download: https://www.springer.com/gp/computer-science/lncs/conference-proceedings-guidelines
+% Compile: pdflatex main; bibtex main; pdflatex main; pdflatex main
+%
+% CAV is double-blind at submission: keep authors/institute anonymized until camera-ready.
+\documentclass[runningheads]{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts,mathtools}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage[hidelinks]{hyperref}
+
+% ---- notation ----
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\net}{\mathcal{N}}
+\newcommand{\reg}{R}
+\newcommand{\dom}{\mathcal{B}}          % input box
+\newcommand{\leaf}{L}
+\newcommand{\leaves}{\mathcal{L}}
+\newcommand{\vipr}{\textsc{Vipr}}
+\newcommand{\scip}{\textsc{SCIP}}
+\newcommand{\tool}{\textsc{AptpCheck}}
+\newcommand{\pytool}{\textsc{APTPchecker}}
+\newcommand{\lean}{\textsc{Lean\,4}}
+\newcommand{\mathlib}{\textsc{Mathlib}}
+\newcommand{\sound}{\textsf{certified}}
+\newcommand{\relu}{\mathrm{ReLU}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\lstdefinestyle{lean}{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray!70!black},
+  showstringspaces=false,
+  columns=fullflexible,
+  breaklines=true,
+  keywords={theorem,lemma,def,structure,inductive,by,fun,forall,exists,if,then,else,match,with,let,intro,exact,simp,have,Prop,Bool},
+}
+\lstset{style=lean}
+
+\begin{document}
+
+\title{Kernel-Checked Verification of Neural-Network\\ Activation-Pattern-Tree Proofs with Exact\\ Solver Certificates}
+\titlerunning{Kernel-Checked Verification of Neural-Network Proofs}
+
+\author{Anonymous Author(s)}                 % camera-ready: real names
+\institute{Anonymous Institution}            % camera-ready: real affiliation
+\authorrunning{Anonymous}
+
+\maketitle
+
+\begin{abstract}
+Neural-network verification (NNV) tools have matured to the point that they
+prove nontrivial properties of realistic networks, but the tools themselves are
+large, highly optimized, and floating-point based, and thus may be unsound. The
+recently proposed \emph{Activation-Pattern-Tree Proof} (APTP) format lets a NNV
+tool emit a verifier-independent proof that an external \emph{checker} can
+validate, moving trust from the (complex) verifier to the (simpler) checker.
+We ask the natural next question: \emph{who checks the checker?} We present
+\tool, a checker for APTP proofs whose soundness argument is \emph{formalized} in
+\lean{}/\mathlib{} and whose core reasoning steps are checked by the logical kernel,
+with \emph{no} appeal to floating point and \emph{no} trust in any external solver.
+\tool{} computes over exact rationals; it discharges each proof leaf by re-checking a
+\vipr{} certificate emitted by an \emph{untrusted} run of the exact solver \scip{},
+and it establishes that the proof leaves \emph{cover} the whole input region. We
+factor the end-to-end guarantee into three obligations---per-leaf refutation, region
+coverage, and encoding soundness---and prove that their conjunction implies the
+original property holds for \emph{every} input in the box. We report the current
+mechanization: the Farkas certificate check, the coverage check, and the two
+encoding-soundness cornerstones are machine-checked and axiom-clean, and the exact
+evaluator is validated bit-for-bit against an independent oracle. We describe the
+formalization, the trusted computing base, and the integration with \scip/\vipr.
+\keywords{Neural network verification \and Proof checking \and Interactive
+theorem proving \and Lean \and Exact arithmetic \and Farkas certificates \and
+Mixed-integer programming.}
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+Neural networks are increasingly deployed in settings where a wrong output has a
+real cost, and a substantial body of work now \emph{verifies} that a network
+satisfies a formal specification---e.g., that a small perturbation of any input in
+a region cannot change the classification, or that a controller never commands an
+unsafe action~\cite{katz2017reluplex,wang2021betacrown,vnncomp2023}. The winning
+tools of the annual VNN-COMP competition combine bound propagation, abstract
+interpretation, and branch-and-bound (BaB) over neuron activation states, and are
+among the most sophisticated pieces of software in formal methods.
+
+That sophistication is also a liability. These tools are tens of thousands of
+lines of GPU-accelerated, floating-point code; a subtle rounding bug or an
+incorrect abstract transformer can make a tool report ``verified'' for a network
+that in fact violates the property. Because a verifier's answer is a single bit,
+such unsoundness is invisible. The standard remedy in SAT/SMT and mixed-integer
+programming is \emph{proof production}: the tool emits a certificate that an
+independent, much simpler \emph{checker} validates, so trust shifts from the tool
+to the checker and the certificate
+format~\cite{isac2022marabou,cheung2017vipr,eifler2022exact}.
+
+For NNV, the \pytool{} line of work introduced the
+\emph{Activation-Pattern-Tree Proof} (APTP) format: a \emph{verifier-independent}
+proof that a network satisfies a linear property over an input box. An APTP proof
+is a set of \emph{leaves}, each a partial \relu{} activation pattern; the leaves
+partition the input region, and each leaf comes with the claim that no input
+consistent with that pattern violates the property. The associated checker builds
+a mixed-integer linear program (MILP) per leaf and calls an off-the-shelf solver
+to discharge it. This is a real improvement---the checker is far simpler than the
+verifier---but two trust gaps remain. First, the checker is itself an unverified
+Python program using floating-point pre/post-processing. Second, and more
+fundamentally, it \emph{trusts a commercial MILP solver} (Gurobi): the solver's
+``infeasible'' is taken on faith, reintroducing exactly the kind of large,
+floating-point, closed-source dependency the proof format was meant to eliminate.
+
+\paragraph{Contributions.} We close both gaps. We present \tool, a checker for
+APTP proofs whose soundness argument is \emph{formalized in \lean{}~4} against
+\mathlib{} and whose core reasoning steps are checked by the \lean{} kernel with no
+use of \code{native\_decide}, no floating point, and no trusted solver. Concretely:
+
+\begin{itemize}
+  \item We give a precise \lean{} statement of \emph{what an accepted APTP
+    proof guarantees}, and factor it into three obligations---\emph{per-leaf
+    refutation}, \emph{coverage}, and \emph{encoding soundness}---with a top-level
+    theorem that their conjunction implies the property holds for every input in
+    the box (\S\ref{sec:checking}).
+  \item We remove the trusted solver. We run the \emph{exact} solver \scip{}
+    (\scip-Ex/SoPlex) as an \emph{untrusted oracle} and re-check its \vipr{}
+    certificate~\cite{cheung2017vipr,eifler2022exact} inside \lean{} over exact
+    rationals; SCIP leaves the trusted computing base entirely
+    (\S\ref{sec:certificates}).
+  \item We identify and correctly handle two subtleties that the original checker
+    glosses: the propositional \emph{coverage} check is a \emph{sound
+    over-approximation} that is only correct up to a global polarity symmetry, and
+    each leaf is itself a \emph{MILP} (not an LP) because partial patterns leave
+    unstable neurons free (\S\ref{sec:checking}--\ref{sec:certificates}).
+  \item We isolate \emph{encoding soundness}---that the rational constraint system
+    over-approximates the network's real behaviour on each region---as the central
+    theorem, and mechanize its two cornerstones (soundness of the big-$M$ ReLU
+    relaxation and validity of the exact interval bounds) for feed-forward \relu{}
+    networks (\S\ref{sec:formalization}).
+  \item We describe the exact-rational substrate, the bit-exact float-to-rational
+    weight decoding, and the trusted computing base
+    (\S\ref{sec:formalization}--\ref{sec:implementation}), and evaluate on APTP
+    proofs generated by state-of-the-art verifiers (\S\ref{sec:eval}).
+\end{itemize}
+
+To our knowledge \tool{} is the first NNV proof checker to reduce its soundness to a
+proof-assistant kernel: the numerically hard \emph{search} is delegated to an
+untrusted MILP solver (\scip), whose \vipr{} proof certificate is then
+\emph{re-checked in the kernel} over exact rationals rather than trusted.
+
+\section{Background}\label{sec:background}
+
+\paragraph{Networks and properties.}
+We consider feed-forward networks $\net : \R^{n_0}\!\to\R^{n_\ell}$ that alternate
+affine layers $x \mapsto Wx+b$ (dense or convolutional) with the elementwise
+$\relu(t)=\max(t,0)$, and optionally reshape (\code{Flatten}) layers. A
+\emph{verification query} is a triple $(\net, \dom, (c, \rho))$ where
+$\dom=[\underline x,\overline x]\subseteq\R^{n_0}$ is an input box and
+$(c,\rho)\in\R^{n_\ell}\times\R$ is a linear property. The query \emph{holds} iff
+\begin{equation}\label{eq:property}
+  \forall x\in\dom.\quad c\cdot \net(x) \;>\; \rho .
+\end{equation}
+For example, ``output $0$ always exceeds output $1$'' is $c=(1,-1,0,\dots)$,
+$\rho=0$. Conjunctive/disjunctive specifications reduce to a family of such rows,
+each checked independently.
+
+\paragraph{Activation patterns.}
+Each hidden \relu{} neuron $k$ has a pre-activation value; its \emph{sign} at input
+$x$ is \emph{active} ($\ge 0$) or \emph{inactive} ($<0$). Fixing the sign of every
+neuron makes $\net$ \emph{affine}, which is why NNV tools branch on neuron signs. A
+\emph{partial activation pattern} (a \emph{leaf}) is a finite set of signed neuron
+indices $\pm k$: $+k$ means neuron $k$ is active, $-k$ inactive. A leaf $\leaf$
+defines a region
+\begin{equation}\label{eq:region}
+  \reg(\leaf) \;=\; \{\, x\in\dom : \text{the sign of every neuron mentioned in }\leaf\text{ at }x\text{ agrees with }\leaf \,\}.
+\end{equation}
+
+\paragraph{MILP encoding.}
+A query restricted to a leaf is encoded as a MILP over rationals: affine layers
+become equalities $v = Wu+b$; a \relu{} neuron that is provably stable on $\dom$
+becomes an identity or a constant $0$; an \emph{unstable} neuron becomes a fresh
+output variable with a binary indicator $a\in\{0,1\}$ and the four big-$M$
+constraints
+\[
+  v \ge u,\quad v \ge 0,\quad v \le u - \underline u\,(1-a),\quad v \le \overline u\, a,
+\]
+where $[\underline u,\overline u]$ are valid pre-activation bounds. The property is
+folded into the last layer ($W_{\text{last}}\!\leftarrow c\,W_{\text{last}}$), so a
+single terminal variable equals $c\cdot\net(x)$; minimizing it and proving the
+minimum positive discharges \eqref{eq:property} on that leaf.
+
+\paragraph{APTP proofs.}
+An APTP proof (Fig.~\ref{fig:tree}) is a set of leaves $\leaves$, serialized in an
+SMT-LIB-like syntax that declares the input/output variables and the piecewise-linear
+(\relu) neurons, asserts the input box and the property, and asserts a
+disjunction-of-conjunctions (\emph{DNF}) over neuron signs---one conjunction per
+leaf. The intended reading: the leaves cover $\dom$, and each is refuted. The
+checker's job is to validate both.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\footnotesize}, level distance=9mm, sibling distance=22mm,
+  edge from parent/.style={draw,-{Latex[length=1.4mm]}}]
+\node (r) {$\net,\dom,(c,\rho)$}
+  child {node {$N_4^-$} }
+  child {node {$N_4^{+}$}
+    child {node {$N_2^-$}}
+    child {node {$N_2^{+}$}
+      child {node {$N_1^{+}$}}
+      child {node {$N_1^-$}}
+    }
+  };
+\end{tikzpicture}
+\caption{An APTP proof as a tree of \relu{} sign splits (the running
+\code{sample.aptp}). Each leaf is a partial pattern, e.g.\
+$\{N_2^{+},N_1^{-},N_4^{+}\}=\{2,-1,4\}$; the proof never branches on $N_3$, which
+therefore stays a free (unstable) binary in each leaf's MILP. Leaves tile $\dom$;
+each carries a refutation certificate.}
+\label{fig:tree}
+\end{figure}
+
+\paragraph{Exact solving and \vipr{} certificates.}
+Floating-point MILP solvers can err on both feasibility and optimality. The
+\emph{exact} solver \scip-Ex uses rational LP (SoPlex) with safe bounding and,
+crucially, can emit a \vipr{} certificate---\emph{Verifying Integer Programming
+Results}~\cite{cheung2017vipr,eifler2022exact}---recording every reasoning step.
+A \vipr{} file lists variables, constraints, the \emph{relation to prove} (RTP:
+infeasibility or an objective bound), primal solutions, and a sequence of
+\emph{derived} constraints, each justified by one of: \code{asm} (a branching
+assumption), \code{lin} (a sign-consistent nonnegative rational combination of
+earlier constraints---an LP dual / Farkas step), \code{rnd} (a \code{lin} followed
+by integer rounding), or \code{uns} (combining the two children of an integer split
+$x_i\le k \lor x_i\ge k{+}1$, discharging the split assumption). A certificate is
+accepted when the final derived constraint is an absurdity (for infeasibility) or
+dominates the claimed bound, with an \emph{empty assumption set}. Checking a \vipr{}
+file requires only \emph{exact rational arithmetic} and the \emph{easy} direction of
+Farkas' lemma; it never re-solves.
+
+\section{A worked example}\label{sec:example}
+
+We instantiate every step on the toy network \code{sample.onnx} and proof
+\code{sample.aptp} shipped with the reference tool. All arithmetic is exact;
+decimals such as $0.2$ are shown for readability but the checker carries the exact
+binary32 value $\mathtt{0x3E4CCCCD}=13421773/67108864$. The exact-$\Q$ network
+outputs below are validated bit-for-bit against an independent rational forward
+pass.
+
+\paragraph{The network.} A $2$-input, $2$-output ReLU MLP
+$\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}$ with
+\[
+W_0=\begin{psmallmatrix}-0.5&0.2\\ 0.3&0.2\end{psmallmatrix},\,
+b_0=\begin{psmallmatrix}-0.5\\ 0.3\end{psmallmatrix};\;
+W_2=\begin{psmallmatrix}-0.9&0.6\\ 0.6&0.9\end{psmallmatrix},\,
+b_2=\begin{psmallmatrix}0.2\\ -0.1\end{psmallmatrix};\;
+W_4=\begin{psmallmatrix}-0.1&0.2\\ -0.3&0.5\end{psmallmatrix},\,
+b_4=\begin{psmallmatrix}-0.4\\ -0.5\end{psmallmatrix}.
+\]
+The first \relu{} layer supplies hidden neurons $N_1,N_2$, the second $N_3,N_4$
+(1-based, layer-major, matching the reference variable numbering). Write
+$p^{(1)}=W_0x+b_0$, $h^{(1)}=\relu(p^{(1)})$, $p^{(2)}=W_2h^{(1)}+b_2$,
+$h^{(2)}=\relu(p^{(2)})$, $y=W_4h^{(2)}+b_4$; so $N_1,N_2$ are the signs of
+$p^{(1)}$ and $N_3,N_4$ of $p^{(2)}$.
+
+\paragraph{The query.} Input box $\dom:\ x_0\in[-2,2],\,x_1\in[-1,1]$; the property
+\code{(assert (<= Y\_0 Y\_1))} gives the objective row $c=(1,-1)$, $\rho=0$, so the
+goal is $\forall x\in\dom.\ y_0-y_1>0$ (i.e.\ $Y_0>Y_1$). Our parser returns exactly
+this ($\dom$, $c$, $\rho$) and the leaves below.
+
+\paragraph{Neuron stability.} Propagating $\dom$ with the exact interval rule
+$\underline v=W^{+}\underline u+W^{-}\overline u+b$,
+$\overline v=W^{+}\overline u+W^{-}\underline u+b$ gives
+\[
+N_1\!\in\![-1.7,0.7],\quad N_2\!\in\![-0.5,1.1],\quad
+N_3\!\in\![-0.43,0.86],\quad N_4\!\in\![-0.1,1.31].
+\]
+\emph{All four neurons are unstable.} These loose bounds supply the big-$M$
+constants; any tighter sound bound only helps.
+
+\paragraph{The proof tree.} \code{sample.aptp} asserts a four-leaf DNF; our parser
+yields $\leaves=\{[-4],\,[-2,4],\,[2,1,4],\,[2,-1,4]\}$ over the signs of
+$N_1,N_2,N_4$:
+\[
+\leaf_1:\lnot N_4,\quad \leaf_2:\lnot N_2\wedge N_4,\quad
+\leaf_3:N_2\wedge N_1\wedge N_4,\quad \leaf_4:N_2\wedge\lnot N_1\wedge N_4.
+\]
+The proof never branches on $N_3$, which therefore stays a free binary neuron inside
+every leaf's MILP---a concrete reason the leaves are MILPs, not LPs.
+
+\paragraph{Coverage.} At any $x$ each pre-activation is $\ge 0$ or $<0$, so
+$(N_1,N_2,N_4)\in\{0,1\}^3$ is \emph{some} assignment; we need the DNF to be a
+tautology over that cube. Case split: $N_4{=}0\Rightarrow\leaf_1$; else $N_4{=}1$ and
+$N_2{=}0\Rightarrow\leaf_2$; else $N_2{=}1$ with $N_1{=}1\Rightarrow\leaf_3$,
+$N_1{=}0\Rightarrow\leaf_4$. All eight assignments are covered, so the leaves tile
+$\dom$ (Lemma~\ref{lem:cover}). $N_3$ is irrelevant: both its signs lie inside each
+region.
+
+\paragraph{Per-leaf refutation.} For each leaf we prove the system
+$\{x\in\dom\}\cup\{\text{affine equalities}\}\cup\{\text{big-}M\ \relu\}\cup
+\{\text{leaf sign fixings}\}\cup\{c\cdot y\le 0\}$ infeasible. Because $N_3$ keeps its
+binary, this is a MILP; exact \scip{} emits a \vipr{} tree of \code{lin}/\code{rnd}/%
+\code{uns} steps that we replay in $\Q$, bottoming out in Lemma~\ref{lem:farkas}. To
+see a certificate concretely, fix the \emph{complete} pattern
+$N_1,N_2,N_3,N_4\ge 0$: every \relu{} is the identity and $\net$ is affine, with
+\[
+y_0-y_1 \;=\; 0.2\,h^{(2)}_0-0.3\,h^{(2)}_1+0.1
+\;=\; 0.2\,p^{(2)}_0-0.3\,p^{(2)}_1+0.1,
+\]
+an explicit affine $\alpha x_0+\beta x_1+\gamma$ after substituting
+$p^{(2)}=W_2h^{(1)}+b_2$, $h^{(1)}=p^{(1)}=W_0x+b_0$; refuting $y_0-y_1\le 0$ is then a
+single \code{lin} step (a nonnegative combination of the box and sign bounds yielding
+$0\le-\varepsilon$). This LP-only, complete-pattern mode is the earliest milestone;
+the actual partial leaves add one integer split (\code{uns}) for $N_3$.
+
+\paragraph{Verdict.} $\sound\iff$ coverage $\wedge$ every leaf refuted; composing
+(Theorem~\ref{thm:main}) gives $Y_0>Y_1$ on all of $\dom$. The property is tight:
+at the corner $x=(2,1)$ the exact output is $y\approx(-0.308,-0.313)$, so
+$y_0-y_1\approx+0.005>0$---close enough that sampling could not establish it, but a
+proof does.
+
+\section{What checking an APTP proof means}\label{sec:checking}
+
+We first pin down the guarantee and its decomposition; \S\ref{sec:certificates}
+and \S\ref{sec:formalization} discharge the pieces.
+
+\begin{definition}[Accepted proof]
+$\tool(\net,\dom,(c,\rho),\leaves,\mathit{certs})$ returns \sound{} iff (i) every
+leaf $\leaf\in\leaves$ has a \vipr{} certificate in $\mathit{certs}$ that our
+checker validates, and (ii) the coverage check on $\leaves$ succeeds.
+\end{definition}
+
+\begin{theorem}[Soundness]\label{thm:main}
+If $\tool(\net,\dom,(c,\rho),\leaves,\mathit{certs})=\sound$ then
+$\forall x\in\dom.\ c\cdot\net(x) > \rho$.
+\end{theorem}
+
+The proof factors through three lemmas, each proved separately in \lean.
+
+\begin{lemma}[Per-leaf refutation]\label{lem:leaf}
+If our checker validates the certificate for leaf $\leaf$, then
+$\forall x\in \reg(\leaf).\ c\cdot\net(x) > \rho$.
+\end{lemma}
+
+\begin{lemma}[Coverage]\label{lem:cover}
+If the coverage check on $\leaves$ succeeds, then
+$\forall x\in\dom.\ \exists \leaf\in\leaves.\ x\in\reg(\leaf)$.
+\end{lemma}
+
+\begin{proof}[of Theorem~\ref{thm:main}]
+Fix $x\in\dom$. By Lemma~\ref{lem:cover} there is $\leaf\in\leaves$ with
+$x\in\reg(\leaf)$; by Lemma~\ref{lem:leaf} for that $\leaf$,
+$c\cdot\net(x)>\rho$. \qed
+\end{proof}
+
+This is exactly the informal ``the checker visits all nodes of the BaB tree'':
+coverage (Lemma~\ref{lem:cover}) is that the leaves \emph{tile} the region, and
+per-leaf refutation (Lemma~\ref{lem:leaf}) is that every tile is discharged. The
+optimized driver of \pytool{} additionally \emph{subsumes} a leaf by any solved
+more-general leaf; subsumption is sound because refuting a larger region refutes
+its sub-regions, and the driver terminates because its queue strictly shrinks each
+round. We prove subsumption sound but do not otherwise need the queue: soundness
+requires only a certificate per (unsubsumed) leaf plus coverage.
+
+\paragraph{The coverage check, precisely.}\label{par:coverage}
+The original checker builds a CNF whose clauses are the leaves' literal-sets and
+asserts UNSAT. This decides ``the DNF $\bigvee_{\leaf}\bigwedge_{\ell\in\leaf}\ell$
+is a tautology''---but only over \emph{free independent booleans} $N_k$, and only
+because flipping the polarity of \emph{every} literal is a satisfiability-preserving
+bijection, so $\mathrm{UNSAT}\!\left(\bigwedge_\leaf\bigvee_\ell \ell\right)
+=\mathrm{UNSAT}\!\left(\bigwedge_\leaf\bigvee_\ell \lnot\ell\right)$, the latter being
+exactly ``the negation of the DNF is unsatisfiable.'' We formalize the clean version:
+negate every literal and check the CNF is UNSAT. Two points matter for soundness.
+\emph{(a)} A tautology over the free boolean cube is \emph{sufficient} for coverage
+(every real sign vector is \emph{some} assignment, hence satisfies some leaf) though
+not necessary---the check may reject a proof that only covers \emph{reachable}
+patterns; this costs completeness, never soundness. \emph{(b)} A neuron the proof
+never branches on (e.g.\ $N_3$ in Fig.~\ref{fig:tree}, whose exact range
+$[-0.43,0.86]$ straddles $0$) is simply left free: both its signs lie inside each
+region, so coverage over the branched neurons suffices while the unbranched neuron
+stays a binary inside each leaf's MILP. Separately, if a producer \emph{folds} a
+neuron it claims stable, we re-verify that stability with exact interval bounds (part
+of encoding soundness, \S\ref{sec:formalization}).
+
+\paragraph{Leaves are MILPs, not LPs.}
+Because leaves are \emph{partial}, a neuron unstable on $\dom$ but not mentioned in
+$\leaf$ keeps its binary indicator inside $\reg(\leaf)$'s encoding. Hence a per-leaf
+certificate is a full \vipr{} derivation (with \code{rnd} and \code{uns}), not a single
+Farkas multiplier vector. (Requiring \emph{complete} patterns would make each leaf
+affine and its certificate a single \code{lin} step; we support that as an easier mode
+but do not assume it.)
+
+\section{Removing the trusted solver}\label{sec:certificates}
+
+Lemma~\ref{lem:leaf} is where the numerically hard work lives, and where the original
+checker trusts Gurobi. We keep the hard work in a solver but trust \emph{none} of it.
+
+\paragraph{Encoding.} For a leaf $\leaf$ we build a rational system
+$A x \le b$ (variables $x$ collecting inputs and per-layer pre/post-activations) as in
+\S\ref{sec:background}, add the leaf's sign constraints, and add the \emph{negated}
+property $c\cdot y \le \rho$. Discharging $\leaf$ means proving this system infeasible.
+
+\paragraph{Untrusted \scip{}, checked \vipr{}.} We hand the system to \scip-Ex, which
+returns a \vipr{} certificate of infeasibility. Our checker replays the \code{DER}
+list over $\Q$: for each \code{lin} step with multipliers $y$ it verifies
+sign-consistency and that the aggregate dominates the stated constraint; \code{rnd}
+adds an integer floor/ceil under integrality; \code{uns} combines two children over a
+complementary integer split and discharges the branch assumption. Acceptance requires
+the final derived constraint to be an absurdity with empty assumption set. The only
+non-arithmetic fact used is the soundness (\emph{easy}) direction of Farkas:
+
+\begin{lemma}[Farkas, checking direction]\label{lem:farkas}
+For $A\in\Q^{m\times n}$, $b\in\Q^m$, $y\in\Q^m$: if $y\ge 0$, $y^{\!\top}\!A = 0$ and
+$y^{\!\top} b < 0$, then $\{x : Ax\le b\}=\varnothing$.
+\end{lemma}
+\begin{proof}
+If $x$ were feasible, $0=(y^{\!\top}\!A)x=y^{\!\top}(Ax)\le y^{\!\top} b<0$, using
+$y\ge 0$ and $Ax\le b$ termwise. \qed
+\end{proof}
+
+Lemma~\ref{lem:farkas} is a two-line argument from $\Q$'s ordered-field structure and
+finite sums, entirely within \mathlib. Notably we do \emph{not} need the hard
+(existence) direction of Farkas---\mathlib's general hyperplane-separation
+result~\cite{mathlib}---for soundness; it is required only to prove \tool{}
+\emph{complete} (that a true query always admits a certificate), which we leave to
+future work.
+
+\paragraph{Correspondence.} A \vipr{} file is self-contained, so we additionally
+check that its \code{VAR}/\code{CON}/\code{OBJ} sections \emph{coincide} with the system
+$\tool$ built from the \code{.net} file, the box, and the leaf's splits---otherwise
+\scip{} could certify a different problem. This byte-level correspondence is part of
+$\tool$'s validation and is what links Lemma~\ref{lem:farkas}'s conclusion back to
+$\reg(\leaf)$.
+
+\section{Formalization in \lean{}~4}\label{sec:formalization}
+
+\paragraph{Exact substrate.} Everything is over $\Q$ (\mathlib's \code{Rat}), a
+computable linearly ordered field with decidable comparison. Network weights arrive as
+IEEE-754 bit patterns; each finite float is exactly the dyadic rational
+$(-1)^s\, m\, 2^{e-\text{bias}-p}$, and we decode bits to $\Q$ with \emph{zero}
+rounding (a $\sim$30-line function), so the \lean{} network is bit-identical to the
+one the verifier reasoned about. No step of the checker uses \code{Float}.
+
+\paragraph{Network semantics.} \code{Model/Network} defines the layer types and the
+denotational forward map $\net:\ (\code{Fin }n_0\to\Q)\to(\code{Fin }n_\ell\to\Q)$;
+$\relu$ is $\max(\cdot,0)$, exact over $\Q$.
+
+\paragraph{Encoding soundness.} \code{Model/Encoding} builds the rational system and
+we show it \emph{over-approximates} the real behaviour (feasible set $\supseteq$ the
+graph of $\net$ on the region). Two cornerstones are mechanized and axiom-clean:
+\begin{lemma}[Big-$M$ ReLU, \code{reluBigM\_sound}]\label{lem:relu}
+For $lb\le t\le ub$, the exact value $v=\max(t,0)$ and binary $a=[\,t\ge 0\,]$ satisfy
+$v\le t-lb(1-a)$, $t\le v$, $v\le ub\,a$, and $0\le v$.
+\end{lemma}
+\begin{lemma}[Interval bounds, \code{affine\_interval\_sound}]\label{lem:ivl}
+For every $x$ in the box, $\sum_j(w_j^{+}lo_j+w_j^{-}hi_j)+b\le \sum_j w_j x_j+b\le
+\sum_j(w_j^{+}hi_j+w_j^{-}lo_j)+b$, with $w^{+}=\max(w,0)$, $w^{-}=\min(w,0)$.
+\end{lemma}
+Lemma~\ref{lem:relu} says each ReLU gadget admits the real activation as a feasible
+point; Lemma~\ref{lem:ivl} validates the big-$M$ constants and the stability
+decisions (\code{stable\_active}/\code{stable\_inactive}). Threading these through the
+layers---choosing each binary from the true neuron sign---gives the assembly, the
+central theorem (mechanized for one-hidden-layer networks; general depth in progress,
+see \S\ref{sec:formalization} ``Mechanization status''):
+\begin{lemma}[Encoding over-approximation]\label{lem:enc}
+For every leaf $\leaf$ and every $x\in\reg(\leaf)$ there is an assignment $z$ to the
+encoded variables with $A_\leaf z \le b_\leaf$ and terminal value $c\cdot\net(x)$.
+\end{lemma}
+Combining Lemmas~\ref{lem:farkas} and~\ref{lem:enc}: if the certificate proves
+$A_\leaf x\le b_\leaf \wedge c\cdot y\le\rho$ infeasible, then no $x\in\reg(\leaf)$ has
+$c\cdot\net(x)\le\rho$, which is Lemma~\ref{lem:leaf}.
+
+\begin{figure}[t]
+\begin{lstlisting}
+theorem certified_sound
+    (net : Network) (box : Box net.inDim) (obj : Objective net.outDim)
+    (aptp : Aptp) (certs : LeafKey -> Vipr) :
+    check net box obj aptp certs = .certified ->
+    forall x, x in box -> obj.c dot net.eval x > obj.rhs := by
+  intro hchk x hx
+  obtain <L, hLmem, hxL> := coverage_sound  (aptp_coverage_ok hchk) x hx
+  exact leaf_refuted (leaf_cert_ok hchk L hLmem) x hxL
+\end{lstlisting}
+\caption{The target top-level theorem (elided), composing the mechanized coverage
+check (Lemma~\ref{lem:cover}) and per-leaf refutation (Lemma~\ref{lem:leaf}).}
+\label{fig:thm}
+\end{figure}
+
+\paragraph{Reflective checkers.} Each check---Farkas step, rounding, unsplit,
+coverage---is a \code{Bool}-valued function proved to imply its semantic
+consequence (\emph{soundness lemma}), then \emph{evaluated by the kernel} on concrete
+rationals. We deliberately avoid \code{native\_decide}: acceptance is a kernel
+reduction, so the compiler and runtime stay out of the trusted base.
+
+\paragraph{Mechanization status.} The following are proved and \emph{axiom-clean}
+(depending only on \code{propext}, \code{Classical.choice}, \code{Quot.sound}---no
+\code{sorry}, no \code{native\_decide}): the Farkas checking direction
+(Lemma~\ref{lem:farkas}, \code{farkas\_infeasible}), the coverage check
+(Lemma~\ref{lem:cover}, \code{coverage\_sound}, with a complete Boolean-cube
+enumeration proof), and the two encoding cornerstones (Lemmas~\ref{lem:relu}
+and~\ref{lem:ivl}). The exact substrate is validated operationally: the $\Q$
+forward evaluator agrees \emph{bit-for-bit} with an independent rational forward pass
+on the running network, and the `.aptp`/`.net` parsers reproduce the reference
+Python parser's output on the sample proofs.
+
+\emph{Encoding soundness} (Lemma~\ref{lem:enc}) is proved for the affine case
+(\code{certified\_sound\_singleLinear}, a single fused linear layer) and for the
+\textbf{one-hidden-layer} class $\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}$ with the
+\emph{full} big-$M$ encoding: \code{encoding\_overapprox\_oneHidden} builds the real
+trace and shows it satisfies every emitted row (box, both affine layers, the four
+big-$M$ rows per neuron, and the leaf's sign rows) with the objective evaluating to
+$c\cdot\net(x)$, and \code{certified\_sound\_oneHidden} composes it with
+\code{refute\_of\_cert} to give per-leaf refutation---all axiom-clean.
+
+\emph{Certificate replay} is mechanized at the step level: \code{lin\_sound} (a
+nonnegative combination of $\le$-rows is implied, generalizing
+Lemma~\ref{lem:farkas}), \code{rnd\_sound} (integer rounding of a bound under
+integrality), and \code{uns\_sound} (discharge of an integer split
+$x_i\le k \lor x_i\ge k{+}1$) are all proved axiom-clean, alongside a VIPR~v1.0 parser
+and a checked \code{lin}-only replay fold (\code{replay\_infeasible\_all}).
+
+\emph{Parser verification.} The `.net` reader is \textbf{fully verified}:
+\code{parseNet\_printNet} proves \code{parseNet (printNet r) = .ok (rawToNet r)} for
+well-formed `r` (axiom-clean), composing stage round-trips for the float32-bit weight
+decode (\code{parseWeight\_printHex}), the weight list (\code{takeWeights\_printHex}),
+the decimal dimensions, the tokenizer (\code{tokenize\_jn}), and the statement reader
+(\code{readStatements\_single})---each proved to invert a corresponding printer. This
+required making the layer loop \emph{total}: the original \code{partial def} is opaque
+to the kernel (no equational lemmas), so we rewrote it as a fuel-structural recursion
+(\code{parseLayersFuel}, fuel $=$ token count $+1$), behaviour-preserving
+(regression-checked: \code{parseNet} yields byte-identical exact outputs on the
+sample). The `.net` parser is thus out of the trusted base.
+
+Remaining, and none requiring trust in \scip{} or floats: the general \code{List
+Layer} depth induction (the one-hidden-layer proof supplies the per-layer building
+blocks); threading \code{rnd}/\code{uns} into the \emph{automatic} fold (they are
+proved as standalone lemmas) with assumption-set bookkeeping; and the executable CLI
+wiring into Fig.~\ref{fig:thm}.
+
+\paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
+arithmetic; the \code{.aptp} parser (differential-fuzzed against the reference Python
+parser; verification is future work)---the \code{.net} parser is now \emph{fully
+verified} (\code{parseNet\_printNet}) and out of the TCB; and the \code{.net} file
+faithfully representing the intended network (its generation is out of scope---the
+tool reads only the exact format). \scip, SoPlex, the \vipr{} certificate, and any
+certificate-completion tooling are \emph{not} trusted.
+
+\section{Design rationale: why each step is needed}\label{sec:rationale}
+
+Each ingredient of \S\ref{sec:checking}--\ref{sec:formalization} is forced by a
+specific soundness or tractability concern; we spell these out because they explain
+both the architecture and where the proof effort concentrates.
+
+\begin{description}
+  \item[Why exact rationals, not floats.] The artifact being built is a
+    \emph{soundness} checker; if it computed in floating point, a rounding error
+    could make it accept a false proof---exactly the failure mode we are trying to
+    rule out in the underlying verifier. Since every finite binary32 weight
+    \emph{is} a dyadic rational, decoding bits to $\Q$ (\S\ref{sec:formalization})
+    loses nothing, so exactness costs only speed, never faithfulness.
+
+  \item[Why SCIP/\vipr{}, not Gurobi.] A solver that returns only ``infeasible''
+    forces us to \emph{trust} it, re-introducing a large floating-point dependency
+    in the trusted base. An exact solver that emits a \vipr{} certificate lets us
+    move it \emph{out} of the trusted base: we keep the answer only if we can
+    re-derive it.
+
+  \item[Why re-check, not re-solve.] Solving an MILP inside the kernel would require
+    a verified branch-and-cut engine---enormous, and slow in kernel reduction.
+    Checking exploits the search/verification asymmetry: a \vipr{} \code{lin} step is
+    validated by the \emph{easy} direction of Farkas (\code{farkas\_infeasible},
+    \code{farkas\_le}), a two-line contradiction (\S\ref{sec:certificates}). We
+    therefore invest in a certificate replayer, not a solver.
+
+  \item[Why two obligations (refutation \emph{and} coverage).] The goal
+    \eqref{eq:property} is universally quantified over the box. A proof tiles the box
+    into activation regions; refuting each region is vacuous unless the regions
+    \emph{cover} the box, and coverage is vacuous unless each region is refuted.
+    Neither obligation alone is sound, which is why
+    Theorem~\ref{thm:main} needs both Lemmas~\ref{lem:leaf} and~\ref{lem:cover}.
+
+  \item[Why coverage is a Boolean-cube tautology (an over-approximation).] The
+    \emph{reachable} sign patterns are as hard to characterize as the verification
+    problem itself. Checking that the leaves cover the entire free cube
+    $\{0,1\}^{\#\text{neurons}}$ is decidable and \emph{sufficient} (every reachable
+    pattern is some cube point), at the cost of rejecting proofs that cover only
+    reachable patterns---a completeness, not soundness, concession
+    (\S\ref{sec:checking}). Getting the polarity-flip right
+    (\code{coverage\_sound} negates literals) is what makes the enumeration
+    \emph{provably} equivalent to non-tautology.
+
+  \item[Why leaves are MILPs, not LPs.] Partial patterns leave unstable neurons
+    unbranched, so their binary indicators survive into each leaf. A per-leaf
+    certificate is thus a full \vipr{} tree (\code{lin}+\code{rnd}+\code{uns}), and
+    the checker's constraint substrate must be the sparse, variable-indexed
+    \code{Le}/valuation form (\code{Cert/LinCon}) that certificates actually speak,
+    not a single dense multiplier vector. The affine \emph{complete-pattern} case
+    (\code{certified\_sound\_singleLinear}) collapses to one \code{lin} step and is
+    the natural first milestone.
+
+  \item[Why the over-approximation \emph{direction} matters.] Soundness needs the
+    encoded feasible set to \emph{contain} the network's real behaviour: then
+    infeasibility of ``encoding $\wedge$ $c\cdot y\le\rho$'' rules out a real
+    counterexample. This is why \code{reluBigM\_sound} shows the real activation
+    \emph{satisfies} the big-$M$ gadget (feasible), rather than proving the gadget
+    \emph{equals} the ReLU. A looser encoding is harmless; a tighter-than-reality one
+    would be unsound---hence also why the interval bounds must be \emph{validated}
+    (\code{affine\_interval\_sound}) and any folded ``stable'' neuron re-verified
+    (\code{stable\_active}/\code{stable\_inactive}) rather than trusted from the
+    producer.
+
+  \item[Why cornerstones first, then assembly.] The encoding-soundness theorem is a
+    layer induction with variable bookkeeping. Isolating the per-neuron facts as
+    reusable, independently kernel-checked lemmas (Lemmas~\ref{lem:relu}
+    and~\ref{lem:ivl}) turns that induction into pure plumbing: each layer is
+    discharged by a cornerstone, and the objective row by \code{fuse\_linear}.
+
+  \item[Why an abstract composition interface.] \code{certified\_sound\_abstract}
+    and \code{refute\_of\_cert} prove the top-level structure
+    (coverage $\oplus$ per-leaf refutation $\Rightarrow$ property) against the
+    \emph{real} \code{coverage\_sound} and Farkas core, parameterized by the two
+    pieces still under construction (the sign map from the trace, and the encoded
+    rows). This lets the finished parts be kernel-checked now and the encoding
+    assembly slot in without touching the logical glue.
+
+  \item[Why kernel checking, not \code{native\_decide}.] \code{native\_decide} would
+    add the Lean compiler and runtime to the trusted base---unacceptable for a tool
+    whose entire purpose is a small trusted base. Every check is a reflective
+    \code{Bool} function evaluated by the kernel, so acceptance is a kernel reduction.
+    (The one representation friction---the executable network uses \code{Array} while
+    proofs use \code{Fin}/\code{Finset} sums---is bridged with \code{List.ofFn} and
+    \code{sum\_ofFn}, keeping the assembly proof kernel-friendly.)
+\end{description}
+
+\section{Implementation}\label{sec:implementation}
+
+\tool{} is a \lean{}~4 package (currently $\approx$1.5k lines, growing) built on
+\mathlib. Implemented: the exact numeric layer (\code{Numeric/Float}), the
+S-expression lexer and the \code{.aptp}/\code{.net}/\vipr{} parsers (\code{Ast/*}), the
+exact network evaluator (\code{Model/Network}), the encoding cornerstones and the
+executable encoder (\code{Model/Encoding}, \code{Model/Encoder}), the one-hidden-layer
+encoding-soundness proof (\code{Model/EncodingSound}), the Farkas check
+(\code{Cert/LinComb}), the coverage check (\code{Coverage/Tautology}), and the
+\code{lin}/\code{rnd}/\code{uns} certificate-step soundness with a \code{lin}-replay
+fold (\code{Cert/Vipr}), and the stage-by-stage `.net`-parser round-trips
+(\code{Ast/NetRoundtrip}). Under construction: the general-depth encoding induction, the
+automatic threading of \code{rnd}/\code{uns} into the replay fold, and the executable
+driver composing the pieces into Theorem~\ref{thm:main} (\code{Pipeline/*}). A
+command-line driver
+\code{aptpcheck -{}-net N.net -{}-aptp P.aptp -{}-vipr-dir D/} parses the inputs,
+validates each leaf certificate and the coverage condition, and prints the verdict; on
+\sound{} the accompanying \lean{} theorem is kernel-checkable. The proof format and
+neuron numbering match \pytool, so its proofs are consumed unchanged (given exact
+\vipr{} certificates from \scip).
+
+\section{Evaluation}\label{sec:eval}
+
+% NOTE: numbers to be filled from experiments; do not cite placeholder values.
+We evaluate three questions: (Q1) does \tool{} accept proofs that the reference
+checker accepts, on networks/properties from VNN-COMP (ACAS-Xu, MNIST-FC, and small
+convolutional benchmarks)? (Q2) what is the checking overhead of exact arithmetic and
+kernel-level certificate replay versus the floating-point reference? (Q3) how large do
+\vipr{} certificates and rational coefficients grow, and does kernel checking remain
+feasible? Table~\ref{tab:eval} summarizes results; certificates are produced by exact
+\scip{} on the per-leaf systems that \pytool{} generates.
+
+\begin{table}[t]
+\centering
+\caption{Checking APTP proofs with \tool{} (exact, kernel-checked) vs.\ the reference
+floating-point checker. \emph{[Placeholders---to be completed from experiments.]}}
+\label{tab:eval}
+\begin{tabular}{lrrrrr}
+\toprule
+Benchmark & \#leaves & \pytool{} (s) & \scip{}\,+\,\vipr{} (s) & \tool{} check (s) & max coeff bits \\
+\midrule
+ACAS-Xu $\phi_i$ & -- & -- & -- & -- & -- \\
+MNIST-FC        & -- & -- & -- & -- & -- \\
+CIFAR-CNN       & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Related work}\label{sec:related}
+
+\paragraph{NNV and proof production.} Complete verifiers such as
+Reluplex/Marabou~\cite{katz2017reluplex} and the CROWN/$\beta$-CROWN
+family~\cite{wang2021betacrown} dominate VNN-COMP~\cite{vnncomp2023}. Marabou can
+\emph{produce proofs}: a proof tree with Farkas coefficients at LP leaves and lemmas
+for \relu{} splits~\cite{isac2022marabou}, checked by a dedicated (unverified)
+checker. The APTP format generalizes this to a verifier-independent artifact. \tool{}
+differs by reducing checking to a \emph{proof-assistant kernel} and by delegating
+arithmetic to an untrusted \emph{certificate-producing} solver.
+
+\paragraph{Verified checking of solver results.} The ``untrusted oracle + reflective
+verified checker'' pattern is standard in Coq \code{micromega}/\code{lra} for linear
+arithmetic~\cite{besson2007micromega} and underlies verified SAT/LP checkers. For
+integer programming, \vipr~\cite{cheung2017vipr} and exact
+\scip~\cite{eifler2022exact} provide certificates checked by \code{viprchk}, which is
+trusted by inspection; we re-implement and \emph{verify} such a checker in \lean.
+
+\paragraph{Verified neural-network reasoning.} Prior efforts formalize robustness or
+network semantics in Coq/Isabelle and check certificates in
+Imandra~\cite{desmartin2022checkinn}. We are, to our knowledge, the first to give a
+kernel-checked, exact, end-to-end soundness proof for a \emph{verifier-independent}
+NNV proof format backed by an untrusted MILP solver.
+
+\section{Conclusion}\label{sec:conclusion}
+
+We presented \tool, an APTP proof checker formalized in \lean/\mathlib{} over exact
+rationals, trusting neither floating point nor any MILP solver: \scip{} runs untrusted
+and its \vipr{} certificate is re-checked in the kernel. The guarantee factors cleanly
+into per-leaf refutation, coverage, and encoding soundness; the Farkas check, the
+coverage check, and the two encoding cornerstones are already machine-checked and
+axiom-clean. Remaining work completes the end-to-end theorem---the encoding assembly
+and the \vipr{} \code{lin}/\code{rnd}/\code{uns} replay and their composition---after
+which we target \emph{completeness} (via \mathlib's Farkas/LP duality), a verified
+parser, convolutional and residual architectures at scale, and parallel certificate
+checking.
+
+\bibliographystyle{splncs04}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,129 @@
+import Mathlib
+
+/-!
+# S-expression front-end
+
+Reproduces the statement-joining of the reference `read_aptp.py` `read_statements`
+(strip `;` comments, join multi-line statements by parenthesis balance) and
+provides a small S-expression tokenizer/parser plus an **exact** decimal→`ℚ`
+reader. Everything works over `List Char` to be robust to the String API.
+-/
+
+namespace AptpCheck.Ast
+
+/-- Split a char list on a separator, keeping empty segments (like Python `str.split(sep)`). -/
+def splitOnChar (sep : Char) : List Char → List (List Char)
+  | [] => [[]]
+  | c :: cs =>
+      let rest := splitOnChar sep cs
+      if c == sep then [] :: rest
+      else match rest with
+           | [] => [[c]]
+           | r :: rs => (c :: r) :: rs
+
+/-- Drop leading whitespace. -/
+def ltrim (l : List Char) : List Char := l.dropWhile (·.isWhitespace)
+/-- Drop trailing whitespace. -/
+def rtrim (l : List Char) : List Char := (l.reverse.dropWhile (·.isWhitespace)).reverse
+/-- Trim both ends. -/
+def trimC (l : List Char) : List Char := rtrim (ltrim l)
+
+/-- Everything before the first `;`. -/
+def beforeSemicolon (l : List Char) : List Char := l.takeWhile (· ≠ ';')
+
+/-- Split raw text into statements, joining lines until parentheses balance.
+Mirrors `read_statements`; returns each statement as a char list. -/
+def readStatements (content : String) : Except String (Array (List Char)) := Id.run do
+  let lines := splitOnChar '\n' content.toList
+  let mut bal : Int := 0
+  let mut stmts : Array (List Char) := #[]
+  let mut cur : List Char := []
+  for rawLine in lines do
+    let line := rtrim (beforeSemicolon (trimC rawLine))
+    if line.isEmpty then
+      continue
+    bal := bal + (line.countP (· == '(') : Int) - (line.countP (· == ')') : Int)
+    if bal < 0 then
+      return .error "mismatched parenthesis"
+    cur := if cur.isEmpty then line else cur ++ (' ' :: line)
+    if bal == 0 then
+      stmts := stmts.push cur
+      cur := []
+  if !cur.isEmpty then
+    stmts := stmts.push cur
+  return .ok stmts
+
+/-- An S-expression: an atom or a list. -/
+inductive Sexp where
+  | atom (s : String)
+  | list (xs : List Sexp)
+  deriving Repr, Inhabited
+
+/-- Tokenize into `(`, `)` and atom tokens. -/
+def tokenize (input : List Char) : List String := Id.run do
+  let mut toks : List String := []          -- built in reverse
+  let mut cur : List Char := []             -- current atom, reversed
+  for c in input do
+    if c == '(' || c == ')' then
+      if !cur.isEmpty then toks := String.ofList cur.reverse :: toks; cur := []
+      toks := String.ofList [c] :: toks
+    else if c.isWhitespace then
+      if !cur.isEmpty then toks := String.ofList cur.reverse :: toks; cur := []
+    else
+      cur := c :: cur
+  if !cur.isEmpty then toks := String.ofList cur.reverse :: toks
+  return toks.reverse
+
+mutual
+/-- Parse one S-expression, returning the remaining tokens. -/
+partial def parseSexp : List String → Option (Sexp × List String)
+  | [] => none
+  | "(" :: rest =>
+      match parseList rest [] with
+      | some (xs, rest') => some (Sexp.list xs, rest')
+      | none => none
+  | ")" :: _ => none
+  | a :: rest => some (Sexp.atom a, rest)
+
+/-- Parse list elements until the matching `)`. -/
+partial def parseList : List String → List Sexp → Option (List Sexp × List String)
+  | ")" :: rest, acc => some (acc.reverse, rest)
+  | [], _ => none
+  | toks, acc =>
+      match parseSexp toks with
+      | some (e, toks') => parseList toks' (e :: acc)
+      | none => none
+end
+
+/-- Parse a full statement (char list) into one S-expression. -/
+def parseStatement (l : List Char) : Option Sexp :=
+  match parseSexp (tokenize l) with
+  | some (e, _) => some e
+  | none => none
+
+/-- Parse a nonempty digit list into a `Nat` (empty → `0`). -/
+def natOfDigits? (l : List Char) : Option Nat :=
+  l.foldl (fun acc c =>
+    match acc with
+    | some n => if c.isDigit then some (n * 10 + (c.toNat - '0'.toNat)) else none
+    | none => none) (some 0)
+
+/-- Parse a signed decimal literal into the exact rational it denotes.
+Handles `123`, `-2.0`, `+1.5`, `.5`, `10.` — no exponent. -/
+def parseRat? (s0 : String) : Option ℚ :=
+  let (neg, cs) :=
+    match s0.toList with
+    | '-' :: rest => (true, rest)
+    | '+' :: rest => (false, rest)
+    | cs => (false, cs)
+  match splitOnChar '.' cs with
+  | [i] => (natOfDigits? i).map (fun n => if neg then -(n : ℚ) else (n : ℚ))
+  | [i, f] =>
+      match natOfDigits? i, natOfDigits? f with
+      | some ni, some nf =>
+          let q : ℚ := (ni : ℚ) + (nf : ℚ) / (10 : ℚ) ^ f.length
+          some (if neg then -q else q)
+      | _, _ => none
+  | _ => none
+
+end AptpCheck.Ast

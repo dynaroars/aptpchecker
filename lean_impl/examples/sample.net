@@ -1,0 +1,20 @@
+NET v1
+; Exact serialization of aptpchecker/example/sample.onnx (Gemm-Relu-Gemm-Relu-Gemm).
+; Weights are float32 bit patterns (0xXXXXXXXX); decoded to exact rationals in Lean.
+; Intended values (float32-rounded): see comments.
+INPUT 2
+LAYER Linear 2 2
+; W = [[-0.5, 0.2], [0.3, 0.2]]   b = [-0.5, 0.3]
+W 0xBF000000 0x3E4CCCCD 0x3E99999A 0x3E4CCCCD
+B 0xBF000000 0x3E99999A
+LAYER ReLU
+LAYER Linear 2 2
+; W = [[-0.9, 0.6], [0.6, 0.9]]   b = [0.2, -0.1]
+W 0xBF666666 0x3F19999A 0x3F19999A 0x3F666666
+B 0x3E4CCCCD 0xBDCCCCCD
+LAYER ReLU
+LAYER Linear 2 2
+; W = [[-0.1, 0.2], [-0.3, 0.5]]  b = [-0.4, -0.5]
+W 0xBDCCCCCD 0x3E4CCCCD 0xBE99999A 0x3F000000
+B 0xBECCCCCD 0xBF000000
+END
