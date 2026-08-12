@@ -540,4 +540,73 @@ theorem asObjective_print_Yub (numOut : Nat) (i : Nat) (d : RawDec) (hd : d.WF) 
   rw [parseVarName_print, parseVarName_dec_none d hd, parseRat_RawDec d hd]
   simp
 
+/-! ## Leaf-clause round-trip (`mkLeaf` as a fold) -/
+
+/-- The literal `0` split point, as a canonical decimal (`"+0"`). -/
+def zeroDec : RawDec := ⟨false, ['0'], []⟩
+
+lemma zeroDec_wf : zeroDec.WF := by
+  refine ⟨⟨by simp [zeroDec], ?_⟩, by simp [zeroDec]⟩
+  intro c hc; simp only [zeroDec, List.mem_singleton] at hc; subst hc; decide
+
+lemma zeroDec_value : zeroDec.value = 0 := by
+  simp [RawDec.value, natFromDigits, zeroDec]
+
+lemma zeroDec_pointList : (String.ofList zeroDec.chars).toList = ['+', '0'] := by
+  rw [String.toList_ofList]; decide
+
+lemma parseRat_zero : parseRat? (String.ofList zeroDec.chars) = some 0 := by
+  rw [parseRat_RawDec zeroDec zeroDec_wf, zeroDec_value]
+
+/-- Printed clause item for a signed neuron id `k ≠ 0`: `(>= N_k 0)` or `(< N_{|k|} 0)`. -/
+def leafItemSexp (k : Int) : Sexp :=
+  if 0 < k then
+    .list [.atom ">=", .atom (String.ofList (varNameChars 'N' k.toNat)), .atom (String.ofList zeroDec.chars)]
+  else
+    .list [.atom "<", .atom (String.ofList (varNameChars 'N' (-k).toNat)), .atom (String.ofList zeroDec.chars)]
+
+/-- One `mkLeafStep` on a printed clause item pushes exactly the signed id `k`. -/
+lemma mkLeafStep_item (start : Array Int) (k : Int) (hk : k ≠ 0) :
+    mkLeafStep (.ok start) (leafItemSexp k) = .ok (start.push k) := by
+  rcases lt_trichotomy k 0 with hneg | h0 | hpos
+  · have hnk : ¬ (0 < k) := by omega
+    have hkk : -(Int.ofNat (-k).toNat) = k := by
+      rw [Int.ofNat_eq_natCast, Int.toNat_of_nonneg (by omega)]; omega
+    simp only [leafItemSexp, hnk, if_false, mkLeafStep, zeroDec_pointList,
+      parseVarName_print, parseRat_zero, ne_eq, not_true_eq_false, if_false,
+      show ("<" == ">=") = false from by decide, show ("<" == "<") = true from by decide,
+      if_true, Bool.false_eq_true, hkk]
+    rfl
+  · exact absurd h0 hk
+  · have hkk : (Int.ofNat k.toNat) = k := by
+      rw [Int.ofNat_eq_natCast, Int.toNat_of_nonneg (by omega)]
+    simp only [leafItemSexp, hpos, if_true, mkLeafStep, zeroDec_pointList,
+      parseVarName_print, parseRat_zero, ne_eq, not_true_eq_false, if_false,
+      show (">=" == ">=") = true from by decide, if_true, hkk]
+    rfl
+
+/-- Folding printed clause items accumulates exactly the signed ids. -/
+lemma mkLeaf_foldl (L : List Int) (hL : ∀ k ∈ L, k ≠ 0) (start : Array Int) :
+    (L.map leafItemSexp).foldl mkLeafStep (.ok start) = .ok (start ++ L.toArray) := by
+  induction L generalizing start with
+  | nil => simp
+  | cons k ks ih =>
+    have hk : k ≠ 0 := hL k (List.mem_cons_self ..)
+    have hks : ∀ x ∈ ks, x ≠ 0 := fun x hx => hL x (List.mem_cons_of_mem _ hx)
+    rw [List.map_cons, List.foldl_cons, mkLeafStep_item start k hk, ih hks (start.push k)]
+    congr 1
+    apply Array.toList_inj.mp
+    simp
+
+/-- Printed `(and …)` clause for a leaf (list of signed neuron ids). -/
+def leafClause (L : List Int) : Sexp := .list (.atom "and" :: L.map leafItemSexp)
+
+/-- **Leaf round-trip.** `mkLeaf` recovers a printed leaf clause exactly. -/
+theorem mkLeaf_leafClause (L : List Int) (hL : ∀ k ∈ L, k ≠ 0) :
+    mkLeaf (leafClause L) = .ok L.toArray := by
+  unfold mkLeaf leafClause
+  simp only []
+  rw [mkLeaf_foldl L hL #[]]
+  simp
+
 end AptpCheck.Ast.AptpRoundtrip
