@@ -39,9 +39,13 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > (real trace satisfies the four big-M constraints, from `reluBigM_sound`). So both
 > per-layer building blocks (`boxRows_sat`, `reluRows_sat`) + the objective
 > (`fuse_linear`) + the composition (`refute_of_cert`, `certified_sound_abstract`)
-> are proved. **Encoder soundness (Problem 1) is proved for one hidden layer**
-> (`Model/EncodingSound`: `encoding_overapprox_oneHidden`, `certified_sound_oneHidden`
-> for `Lin→ReLU→Lin` with the full big-M encoding; axiom-clean). **VIPR replay
+> are proved. **Encoder soundness (Problem 1) is proved for arbitrary-depth MLPs**
+> (`Model/EncodingSound`: `encoding_overapprox_mlp`, `certified_sound_mlp`, and
+> `certified_sound_mlp_satLeaf` — the last phrased through the coverage `satLeaf`
+> interface so it composes with `Pipeline.certified_sound_abstract`; for
+> `Lin→ReLU→…→Lin` with the full big-M encoding, by induction on depth; axiom-clean;
+> one-hidden/affine cases retained). Stated on a dimension-indexed `MLP` normal form
+> ending in a linear layer; Conv/CNN out of scope. **VIPR replay
 > (Problem 2) step soundness is proved** (`Cert/Vipr`: `lin_sound`, `rnd_sound`,
 > `uns_sound`, a VIPR v1.0 parser `Ast/Vipr`, and a `lin`-only checked fold
 > `replay_infeasible_all`; axiom-clean). **The `.net` parser is FULLY verified**
@@ -50,10 +54,11 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > is now total via `parseLayersFuel` (fuel `= toks.length+1`, behavior-preserving,
 > regression-checked to give byte-identical exact outputs on the sample). So the
 > `.net` parser is **out of the trusted base**. All modules are wired into the root and
-> the full `lake build` passes (17137 jobs). **Pending**: (a) general `List Layer`
-> depth induction (one-hidden-layer supplies the per-layer blocks); (b) threading
-> `rnd`/`uns` into the automatic fold + assumption-set bookkeeping; (c) executable CLI
-> wiring; (d) verify the `.aptp` parser (still trusted).
+> the full `lake build` passes (17137 jobs). **Pending**: (a) threading `rnd`/`uns`
+> into the automatic fold + assumption-set bookkeeping (Problem 2); (b) bridge the
+> dimension-indexed `MLP` soundness model to the executable `Array`-based
+> `Model/Encoder`; (c) verify the `.aptp` parser (still trusted); (d) Conv/CNN
+> encoding (future); (e) executable CLI wiring (Problem 3).
 
 ---
 

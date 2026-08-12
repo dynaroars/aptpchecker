@@ -465,8 +465,8 @@ Lemma~\ref{lem:relu} says each ReLU gadget admits the real activation as a feasi
 point; Lemma~\ref{lem:ivl} validates the big-$M$ constants and the stability
 decisions (\code{stable\_active}/\code{stable\_inactive}). Threading these through the
 layers---choosing each binary from the true neuron sign---gives the assembly, the
-central theorem (mechanized for one-hidden-layer networks; general depth in progress,
-see \S\ref{sec:formalization} ``Mechanization status''):
+central theorem (mechanized for arbitrary-depth MLPs; Conv/CNN is future work; see
+\S\ref{sec:formalization} ``Mechanization status''):
 \begin{lemma}[Encoding over-approximation]\label{lem:enc}
 For every leaf $\leaf$ and every $x\in\reg(\leaf)$ there is an assignment $z$ to the
 encoded variables with $A_\leaf z \le b_\leaf$ and terminal value $c\cdot\net(x)$.
@@ -508,14 +508,22 @@ forward evaluator agrees \emph{bit-for-bit} with an independent rational forward
 on the running network, and the `.aptp`/`.net` parsers reproduce the reference
 Python parser's output on the sample proofs.
 
-\emph{Encoding soundness} (Lemma~\ref{lem:enc}) is proved for the affine case
-(\code{certified\_sound\_singleLinear}, a single fused linear layer) and for the
-\textbf{one-hidden-layer} class $\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}$ with the
-\emph{full} big-$M$ encoding: \code{encoding\_overapprox\_oneHidden} builds the real
-trace and shows it satisfies every emitted row (box, both affine layers, the four
-big-$M$ rows per neuron, and the leaf's sign rows) with the objective evaluating to
-$c\cdot\net(x)$, and \code{certified\_sound\_oneHidden} composes it with
-\code{refute\_of\_cert} to give per-leaf refutation---all axiom-clean.
+\emph{Encoding soundness} (Lemma~\ref{lem:enc}) is proved for the full
+\textbf{arbitrary-depth MLP} class $\mathrm{Lin}\!\to\!\relu\!\to\!\cdots\!\to\!\mathrm{Lin}$
+(a \code{Linear}, then any number of $(\relu,\mathrm{Linear})$ blocks) with the
+\emph{full} big-$M$ encoding. By induction on depth, \code{encoding\_overapprox\_mlp}
+builds the real trace and shows it satisfies every emitted row (box, every affine
+layer, the four big-$M$ rows per neuron, and the leaf's sign rows) with the objective
+evaluating to $c\cdot\net(x)$; \code{certified\_sound\_mlp} composes it with
+\code{refute\_of\_cert} for per-leaf refutation, and
+\code{certified\_sound\_mlp\_satLeaf} restates the hypothesis through the coverage
+\code{satLeaf} interface so it slots directly into \code{certified\_sound\_abstract}
+(Fig.~\ref{fig:thm}). The affine and one-hidden-layer cases
+(\code{certified\_sound\_singleLinear}, \code{\_oneHidden}) are retained as instances.
+All axiom-clean. (The soundness statement is on a dimension-indexed \code{MLP} normal
+form ending in a linear scoring layer; \code{Flatten} is the identity and elided,
+consecutive linears/ReLUs collapse, and \emph{Conv/CNN is out of scope}, left as future
+work.)
 
 \emph{Certificate replay} is mechanized at the step level: \code{lin\_sound} (a
 nonnegative combination of $\le$-rows is implied, generalizing
@@ -536,11 +544,12 @@ to the kernel (no equational lemmas), so we rewrote it as a fuel-structural recu
 (regression-checked: \code{parseNet} yields byte-identical exact outputs on the
 sample). The `.net` parser is thus out of the trusted base.
 
-Remaining, and none requiring trust in \scip{} or floats: the general \code{List
-Layer} depth induction (the one-hidden-layer proof supplies the per-layer building
-blocks); threading \code{rnd}/\code{uns} into the \emph{automatic} fold (they are
-proved as standalone lemmas) with assumption-set bookkeeping; and the executable CLI
-wiring into Fig.~\ref{fig:thm}.
+Remaining, and none requiring trust in \scip{} or floats: threading
+\code{rnd}/\code{uns} into the \emph{automatic} replay fold (they are proved as
+standalone lemmas) with assumption-set bookkeeping; bridging the dimension-indexed
+\code{MLP} soundness model to the executable \code{Array}-based encoder; verifying the
+\code{.aptp} parser (as done for \code{.net}); Conv/CNN encoding; and the executable
+CLI wiring into Fig.~\ref{fig:thm}.
 
 \paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
 arithmetic; the \code{.aptp} parser (differential-fuzzed against the reference Python
