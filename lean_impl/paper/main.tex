@@ -573,10 +573,16 @@ S-expression parser and rewriting the two-pass \code{parseAptp} loops as total
 \code{List.foldl}s (behaviour-preserving; regression-checked on both sample proofs).
 \textbf{Both} parsers are thus out of the trusted base.
 
-Remaining, and none requiring trust in \scip{} or floats: bridging the
-dimension-indexed \code{MLP} soundness model to the executable \code{Array}-based
-encoder; Conv/CNN encoding; and the executable CLI wiring into Fig.~\ref{fig:thm}
-(including the untrusted flat-VIPR-to-tree converter).
+The soundness is also bridged to the \emph{executable} side: \code{toMLP} converts a
+parsed \code{Array}-based \code{Network} (the MLP normal form) to the
+dimension-indexed \code{MLP}, \code{toMLP\_eval} proves \code{Network.eval} agrees with
+\code{MLP.eval}, and \code{certified\_sound\_network} transports the per-leaf
+refutation onto the parsed network's own output---so the runnable network is exactly
+the one the theorem is about (all axiom-clean).
+
+Remaining, and none requiring trust in \scip{} or floats: Conv/CNN encoding; and the
+executable CLI wiring into Fig.~\ref{fig:thm} (including the untrusted
+flat-VIPR-to-tree converter).
 
 \paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
 arithmetic, and the \code{.net} file faithfully representing the intended network (its
@@ -685,10 +691,10 @@ encoding-soundness proof (\code{Model/EncodingSound}); the Farkas checks
 (\code{Cert/LinComb}, \code{Cert/LinCon}); the coverage check
 (\code{Coverage/Tautology}); the complete proof-by-cases certificate checker
 (\code{Cert/Vipr}: \code{lin}/\code{rnd}/\code{uns} soundness, \code{RefTree}, the
-runnable \code{checkRefTree}); and the composition scaffolding plus the VIPR endpoint
-(\code{Pipeline/Compose}, \code{Pipeline/Affine}, \code{Pipeline/ViprCheck}). Under
-construction: bridging the dimension-indexed \code{MLP} soundness model to the
-executable \code{Array} encoder, Conv/CNN, and the command-line driver
+runnable \code{checkRefTree}); the \code{Network}$\to$\code{MLP} bridge transporting soundness onto the executable
+network (\code{Model/NetworkMLP}); and the composition scaffolding plus the VIPR
+endpoint (\code{Pipeline/Compose}, \code{Pipeline/Affine}, \code{Pipeline/ViprCheck}).
+Under construction: Conv/CNN, and the command-line driver
 \code{aptpcheck -{}-net N.net -{}-aptp P.aptp -{}-vipr-dir D/} that composes the pieces
 into Theorem~\ref{thm:main} (\code{Pipeline/*}) and runs the untrusted
 flat-\vipr{}-to-tree conversion. The proof format and neuron numbering match \pytool,
@@ -754,9 +760,9 @@ and its \vipr{} certificate is re-checked in the kernel. The guarantee factors c
 into per-leaf refutation, coverage, and encoding soundness. Machine-checked and
 axiom-clean: encoding soundness for arbitrary-depth ReLU MLPs, a complete automatic
 proof-by-cases \vipr{} certificate checker (Farkas/rounding/split), the coverage
-check, and---out of the trusted base---both input parsers by round-trip. What remains
-is engineering, not new trust: bridging the dimension-indexed soundness model to the
-executable encoder, assembling the command-line driver (with an untrusted
+check, both input parsers by round-trip (out of the trusted base), and a bridge that
+transports the soundness onto the executable, parsed network. What remains is
+engineering, not new trust: assembling the command-line driver (with an untrusted
 flat-\vipr{}-to-tree converter), and extending to convolutional and residual
 architectures at scale. We then target \emph{completeness} (via \mathlib's Farkas/LP
 duality) and parallel certificate checking.

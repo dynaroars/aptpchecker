@@ -62,11 +62,13 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > de-`partial`-izing the S-expression parser (`parseSexpFuel`/`parseListFuel`) and
 > rewriting the two-pass `parseAptp` loops as total `List.foldl`s (behavior-preserving,
 > regression-checked on both sample proofs). So **both parsers are out of the trusted
-> base**. All modules are wired into the root and the full `lake build` passes (17139
-> jobs). **Pending**: (a) bridge the dimension-indexed `MLP` soundness model to the
-> executable `Array`-based `Model/Encoder`; (b) Conv/CNN encoding (future); (c) the
+> base**. The **`Network`→`MLP` bridge** is done (`Model/NetworkMLP`: `toMLP`,
+> `toMLP_eval` — `Network.eval` agrees with `MLP.eval` on the MLP normal form, and
+> `certified_sound_network{,_satLeaf}` transport the per-leaf refutation onto the
+> executable parsed network; axiom-clean). All modules wired into the root; full `lake
+> build` passes (17143 jobs). **Pending**: (a) Conv/CNN encoding (future); (b) the
 > executable CLI wiring (Problem 3), including the untrusted flat-VIPR→`RefTree`
-> converter feeding `checkRefTree`.
+> converter feeding `checkRefTree` and the VIPR↔encoding correspondence check.
 
 ---
 

@@ -45,12 +45,13 @@ original Python tool's output on the sample files.
 
 ## What's NOT covered yet / caveats
 
-- **The verified math is not yet wired to the fast, runnable code.** The
-  soundness guarantee is proven about a *clean mathematical model* of the network.
-  The separate, efficient, actually-runnable version of the encoder has not yet
-  been formally connected to that model. So the end-to-end runnable tool is not
-  yet certified end to end — the guarantee currently lives in the idealized model,
-  not in the executable path.
+- **The verified soundness now reaches the runnable network, but the tool isn't
+  assembled into one command yet.** A proven bridge converts the actual parsed
+  network into the clean mathematical model and shows the two compute the same
+  outputs, so the guarantee applies to the executable network — not just an idealized
+  copy. What's still missing is gluing everything (parsers, network, checker) into a
+  single command-line program, plus the small *untrusted* step that turns the solver's
+  proof file into the tree the checker validates.
 
 - **Only standard fully-connected ReLU networks are covered.** The proof applies
   to a "normal form" network: a first linear layer followed by any number of
