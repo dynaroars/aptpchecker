@@ -681,4 +681,319 @@ theorem readStatementsFold_multi (lines : List (List Char)) (content : String)
     readStmtStep_fold lines hc #[], List.foldl_cons, List.foldl_nil, readStmtStep_nil]
   simp
 
+
+/-! ## Assembly fold lemmas (scan passes as folds over the printed statements) -/
+
+/-- parseAll fold: printed statements parse back to the sexps (short-circuit-free). -/
+lemma parseAll_fold (es : List Sexp) (hwf : ∀ e ∈ es, WF e) :
+    ∀ (start : Array Sexp),
+      (es.map stmtChars).foldl parseAllStep (.ok start) = .ok (start ++ es.toArray) := by
+  induction es with
+  | nil => intro start; simp
+  | cons e es ih =>
+    intro start
+    have hwfe : WF e := hwf e (List.mem_cons_self ..)
+    have hwfes : ∀ x ∈ es, WF x := fun x hx => hwf x (List.mem_cons_of_mem _ hx)
+    rw [List.map_cons, List.foldl_cons]
+    have hstep : parseAllStep (.ok start) (stmtChars e) = .ok (start.push e) := by
+      unfold parseAllStep
+      rw [parseStatement_stmtChars e hwfe]
+    rw [hstep, ih hwfes (start.push e)]
+    have : start.push e ++ es.toArray = start ++ (e :: es).toArray := by
+      apply Array.toList_inj.mp; simp
+    rw [this]
+
+/-- Objective spec: difference of two outputs, or single-output upper bound. -/
+inductive RawObj where
+  | diff (i j : Nat)
+  | ub (i : Nat) (d : RawDec)
+
+def xDeclSexp (i : Nat) : Sexp :=
+  .list [.atom "declare-const", .atom (String.ofList (varNameChars 'X' i)), .atom "Real"]
+def yDeclSexp (j : Nat) : Sexp :=
+  .list [.atom "declare-const", .atom (String.ofList (varNameChars 'Y' j)), .atom "Real"]
+def nDeclSexp (k : Nat) : Sexp :=
+  .list [.atom "declare-pwl", .atom (String.ofList (varNameChars 'N' k)), .atom "ReLU"]
+def boxLoSexp (i : Nat) (d : RawDec) : Sexp :=
+  .list [.atom "assert", .list [.atom ">=", .atom (String.ofList (varNameChars 'X' i)), .atom (String.ofList d.chars)]]
+def boxHiSexp (i : Nat) (d : RawDec) : Sexp :=
+  .list [.atom "assert", .list [.atom "<=", .atom (String.ofList (varNameChars 'X' i)), .atom (String.ofList d.chars)]]
+def objSexp : RawObj → Sexp
+  | .diff i j => .list [.atom "assert", .list [.atom "<=", .atom (String.ofList (varNameChars 'Y' i)), .atom (String.ofList (varNameChars 'Y' j))]]
+  | .ub i d => .list [.atom "assert", .list [.atom "<=", .atom (String.ofList (varNameChars 'Y' i)), .atom (String.ofList d.chars)]]
+def orAssertSexp (leaves : List (List Int)) : Sexp :=
+  .list [.atom "assert", .list (.atom "or" :: leaves.map leafClause)]
+
+-- scanDeclsStep steps
+lemma scanDeclsStep_x (acc : Int × Int × Array Nat) (i : Nat) :
+    scanDeclsStep (.ok acc) (xDeclSexp i) = .ok (max acc.1 (Int.ofNat i), acc.2.1, acc.2.2) := by
+  obtain ⟨mi, mo, ns⟩ := acc
+  unfold scanDeclsStep xDeclSexp
+  simp only [List.dropLast_concat]
+  rw [show [Sexp.atom (String.ofList (varNameChars 'X' i)), Sexp.atom "Real"].dropLast
+        = [Sexp.atom (String.ofList (varNameChars 'X' i))] from rfl]
+  simp only [List.foldl_cons, List.foldl_nil, scanConstName, parseVarName_print]
+
+lemma scanDeclsStep_y (acc : Int × Int × Array Nat) (j : Nat) :
+    scanDeclsStep (.ok acc) (yDeclSexp j) = .ok (acc.1, max acc.2.1 (Int.ofNat j), acc.2.2) := by
+  obtain ⟨mi, mo, ns⟩ := acc
+  unfold scanDeclsStep yDeclSexp
+  simp only [List.dropLast_concat]
+  rw [show [Sexp.atom (String.ofList (varNameChars 'Y' j)), Sexp.atom "Real"].dropLast
+        = [Sexp.atom (String.ofList (varNameChars 'Y' j))] from rfl]
+  simp only [List.foldl_cons, List.foldl_nil, scanConstName, parseVarName_print]
+
+lemma scanDeclsStep_n (acc : Int × Int × Array Nat) (k : Nat) :
+    scanDeclsStep (.ok acc) (nDeclSexp k) = .ok (acc.1, acc.2.1, acc.2.2.push k) := by
+  obtain ⟨mi, mo, ns⟩ := acc
+  unfold scanDeclsStep nDeclSexp
+  simp only [List.dropLast_concat]
+  rw [show [Sexp.atom (String.ofList (varNameChars 'N' k)), Sexp.atom "ReLU"].dropLast
+        = [Sexp.atom (String.ofList (varNameChars 'N' k))] from rfl]
+  simp only [List.foldl_cons, List.foldl_nil, scanPwlName, parseVarName_print]
+
+-- identity lemmas
+lemma scanDeclsStep_assert (acc : Int × Int × Array Nat) (body : Sexp) :
+    scanDeclsStep (.ok acc) (.list [.atom "assert", body]) = .ok acc := by
+  obtain ⟨mi, mo, ns⟩ := acc; rfl
+
+lemma scanAssertsStep_xdecl (numOut : Nat) (acc : AssertState) (i : Nat) :
+    scanAssertsStep numOut (.ok acc) (xDeclSexp i) = .ok acc := by
+  obtain ⟨lo, hi, objs, leaves⟩ := acc; rfl
+
+lemma scanAssertsStep_ydecl (numOut : Nat) (acc : AssertState) (j : Nat) :
+    scanAssertsStep numOut (.ok acc) (yDeclSexp j) = .ok acc := by
+  obtain ⟨lo, hi, objs, leaves⟩ := acc; rfl
+
+lemma scanAssertsStep_ndecl (numOut : Nat) (acc : AssertState) (k : Nat) :
+    scanAssertsStep numOut (.ok acc) (nDeclSexp k) = .ok acc := by
+  obtain ⟨lo, hi, objs, leaves⟩ := acc; rfl
+
+lemma scanAssertsStep_boxLo (numOut : Nat) (lo hi : Array (Option ℚ)) (objs : Array Objective)
+    (leaves : Array (Array Int)) (i : Nat) (d : RawDec) (hd : d.WF) (hnone : lo[i]! = none) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves)) (boxLoSexp i d)
+      = .ok (lo.set! i (some d.value), hi, objs, leaves) := by
+  unfold scanAssertsStep boxLoSexp
+  simp only [asBoxUpdate_print ">=" i d hd, show (">=" == "<=") = false from by decide,
+    Bool.false_eq_true, if_false, hnone]
+
+lemma scanAssertsStep_boxHi (numOut : Nat) (lo hi : Array (Option ℚ)) (objs : Array Objective)
+    (leaves : Array (Array Int)) (i : Nat) (d : RawDec) (hd : d.WF) (hnone : hi[i]! = none) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves)) (boxHiSexp i d)
+      = .ok (lo, hi.set! i (some d.value), objs, leaves) := by
+  unfold scanAssertsStep boxHiSexp
+  simp only [asBoxUpdate_print "<=" i d hd, show ("<=" == "<=") = true from by decide,
+    if_true, hnone]
+
+lemma scanAssertsStep_objDiff (numOut : Nat) (lo hi : Array (Option ℚ)) (objs : Array Objective)
+    (leaves : Array (Array Int)) (i j : Nat) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves)) (objSexp (.diff i j))
+      = .ok (lo, hi, objs.push { c := ((List.replicate numOut (0:ℚ)).toArray.set! i 1).set! j (-1), rhs := 0 }, leaves) := by
+  unfold scanAssertsStep objSexp
+  have hbox : asBoxUpdate "<=" (String.ofList (varNameChars 'Y' i)) (String.ofList (varNameChars 'Y' j)) = none := by
+    unfold asBoxUpdate; rw [parseVarName_print]; rfl
+  simp only [hbox, asObjective_print_YY]
+
+lemma scanAssertsStep_objUb (numOut : Nat) (lo hi : Array (Option ℚ)) (objs : Array Objective)
+    (leaves : Array (Array Int)) (i : Nat) (d : RawDec) (hd : d.WF) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves)) (objSexp (.ub i d))
+      = .ok (lo, hi, objs.push { c := (List.replicate numOut (0:ℚ)).toArray.set! i 1, rhs := d.value }, leaves) := by
+  unfold scanAssertsStep objSexp
+  have hbox : asBoxUpdate "<=" (String.ofList (varNameChars 'Y' i)) (String.ofList d.chars) = none := by
+    unfold asBoxUpdate; rw [parseVarName_print]; rfl
+  simp only [hbox, asObjective_print_Yub _ _ d hd]
+
+-- Array set!/get! helpers
+lemma get!_set!_ne (a : Array (Option ℚ)) (i j : Nat) (v : Option ℚ) (hij : i ≠ j) :
+    (a.set! i v)[j]! = a[j]! := by
+  rw [Array.set!, Array.getElem!_eq_getD, Array.getElem!_eq_getD]
+  simp [Array.getElem?_setIfInBounds, hij]
+
+lemma get!_set!_self (a : Array (Option ℚ)) (i : Nat) (v : Option ℚ) (hi : i < a.size) :
+    (a.set! i v)[i]! = v := by
+  rw [Array.set!, Array.getElem!_eq_getD]
+  simp [Array.getElem?_setIfInBounds, hi]
+
+lemma set!_size (a : Array (Option ℚ)) (i : Nat) (v : Option ℚ) : (a.set! i v).size = a.size := by
+  simp
+
+/-- Folding sets over indices not equal to `j` leaves index `j` untouched. -/
+lemma foldl_set_get_ne (is : List Nat) (a : Array (Option ℚ)) (g : Nat → Option ℚ) (j : Nat)
+    (hj : j ∉ is) : (is.foldl (fun a i => a.set! i (g i)) a)[j]! = a[j]! := by
+  induction is generalizing a with
+  | nil => rfl
+  | cons i is' ih =>
+    have hne : i ≠ j := by simp only [List.mem_cons, not_or] at hj; exact Ne.symm hj.1
+    have hj' : j ∉ is' := by simp only [List.mem_cons, not_or] at hj; exact hj.2
+    rw [List.foldl_cons, ih (a.set! i (g i)) hj', get!_set!_ne a i j (g i) hne]
+
+/-- Folding sets over a nodup index list writes each index to its value. -/
+lemma foldl_set_get (is : List Nat) (a : Array (Option ℚ)) (g : Nat → Option ℚ) (j : Nat)
+    (hj : j ∈ is) (hnd : is.Nodup) (hbound : ∀ i ∈ is, i < a.size) :
+    (is.foldl (fun a i => a.set! i (g i)) a)[j]! = g j := by
+  induction is generalizing a with
+  | nil => simp at hj
+  | cons i is' ih =>
+    rw [List.foldl_cons]
+    rw [List.nodup_cons] at hnd
+    rcases List.mem_cons.mp hj with rfl | hj'
+    · -- j = i (head)
+      rw [foldl_set_get_ne is' (a.set! j (g j)) g j hnd.1]
+      exact get!_set!_self a j (g j) (hbound j (List.mem_cons_self ..))
+    · -- j ∈ is'
+      have hbound' : ∀ x ∈ is', x < (a.set! i (g i)).size := by
+        intro x hx; rw [set!_size]; exact hbound x (List.mem_cons_of_mem _ hx)
+      exact ih (a.set! i (g i)) hj' hnd.2 hbound'
+
+lemma boxLo_scan (numOut : Nat) (is : List Nat) (dof : Nat → RawDec)
+    (hwf : ∀ i ∈ is, (dof i).WF) (hnd : is.Nodup) (hi : Array (Option ℚ))
+    (objs : Array Objective) (leaves : Array (Array Int)) :
+    ∀ (lo : Array (Option ℚ)), (∀ i ∈ is, i < lo.size) → (∀ i ∈ is, lo[i]! = none) →
+    (is.map (fun i => boxLoSexp i (dof i))).foldl (scanAssertsStep numOut) (.ok (lo, hi, objs, leaves))
+      = .ok (is.foldl (fun a i => a.set! i (some (dof i).value)) lo, hi, objs, leaves) := by
+  induction is with
+  | nil => intro lo _ _; simp
+  | cons i is' ih =>
+    intro lo hbound hnone
+    rw [List.nodup_cons] at hnd
+    have hwfi : (dof i).WF := hwf i (List.mem_cons_self ..)
+    have hnonei : lo[i]! = none := hnone i (List.mem_cons_self ..)
+    rw [List.map_cons, List.foldl_cons,
+      scanAssertsStep_boxLo numOut lo hi objs leaves i (dof i) hwfi hnonei, List.foldl_cons]
+    apply ih (fun x hx => hwf x (List.mem_cons_of_mem _ hx)) hnd.2 (lo.set! i (some (dof i).value))
+    · intro x hx; rw [set!_size]; exact hbound x (List.mem_cons_of_mem _ hx)
+    · intro x hx
+      have hxi : i ≠ x := fun h => hnd.1 (h ▸ hx)
+      rw [get!_set!_ne lo i x _ hxi]; exact hnone x (List.mem_cons_of_mem _ hx)
+
+lemma boxHi_scan (numOut : Nat) (is : List Nat) (dof : Nat → RawDec)
+    (hwf : ∀ i ∈ is, (dof i).WF) (hnd : is.Nodup) (lo : Array (Option ℚ))
+    (objs : Array Objective) (leaves : Array (Array Int)) :
+    ∀ (hi : Array (Option ℚ)), (∀ i ∈ is, i < hi.size) → (∀ i ∈ is, hi[i]! = none) →
+    (is.map (fun i => boxHiSexp i (dof i))).foldl (scanAssertsStep numOut) (.ok (lo, hi, objs, leaves))
+      = .ok (lo, is.foldl (fun a i => a.set! i (some (dof i).value)) hi, objs, leaves) := by
+  induction is with
+  | nil => intro hi _ _; simp
+  | cons i is' ih =>
+    intro hi hbound hnone
+    rw [List.nodup_cons] at hnd
+    have hwfi : (dof i).WF := hwf i (List.mem_cons_self ..)
+    have hnonei : hi[i]! = none := hnone i (List.mem_cons_self ..)
+    rw [List.map_cons, List.foldl_cons,
+      scanAssertsStep_boxHi numOut lo hi objs leaves i (dof i) hwfi hnonei, List.foldl_cons]
+    apply ih (fun x hx => hwf x (List.mem_cons_of_mem _ hx)) hnd.2 (hi.set! i (some (dof i).value))
+    · intro x hx; rw [set!_size]; exact hbound x (List.mem_cons_of_mem _ hx)
+    · intro x hx
+      have hxi : i ≠ x := fun h => hnd.1 (h ▸ hx)
+      rw [get!_set!_ne hi i x _ hxi]; exact hnone x (List.mem_cons_of_mem _ hx)
+
+lemma push_append_toArray {α} (a : Array α) (x : α) (l : List α) :
+    a.push x ++ l.toArray = a ++ (x :: l).toArray := by
+  apply Array.toList_inj.mp; simp
+
+def decodeObj (numOut : Nat) : RawObj → Objective
+  | .diff i j => { c := ((List.replicate numOut (0:ℚ)).toArray.set! i 1).set! j (-1), rhs := 0 }
+  | .ub i d => { c := (List.replicate numOut (0:ℚ)).toArray.set! i 1, rhs := d.value }
+def WFObj : RawObj → Prop
+  | .diff _ _ => True
+  | .ub _ d => d.WF
+
+lemma objs_scan (numOut : Nat) (os : List RawObj) (hwf : ∀ o ∈ os, WFObj o)
+    (lo hi : Array (Option ℚ)) (leaves : Array (Array Int)) :
+    ∀ (objsAcc : Array Objective),
+    (os.map objSexp).foldl (scanAssertsStep numOut) (.ok (lo, hi, objsAcc, leaves))
+      = .ok (lo, hi, objsAcc ++ (os.map (decodeObj numOut)).toArray, leaves) := by
+  induction os with
+  | nil => intro objsAcc; simp
+  | cons o os ih =>
+    intro objsAcc
+    have hwfo : WFObj o := hwf o (List.mem_cons_self ..)
+    have hwfos : ∀ x ∈ os, WFObj x := fun x hx => hwf x (List.mem_cons_of_mem _ hx)
+    rw [List.map_cons, List.foldl_cons]
+    cases o with
+    | diff i j =>
+      rw [scanAssertsStep_objDiff numOut lo hi objsAcc leaves i j, ih hwfos]
+      simp only [List.map_cons, decodeObj, push_append_toArray]
+    | ub i d =>
+      rw [scanAssertsStep_objUb numOut lo hi objsAcc leaves i d hwfo, ih hwfos]
+      simp only [List.map_cons, decodeObj, push_append_toArray]
+
+lemma clause_scan (ls : List (List Int)) (hwf : ∀ L ∈ ls, L ≠ [] ∧ ∀ k ∈ L, k ≠ 0) :
+    ∀ (leavesAcc : Array (Array Int)),
+    (ls.map leafClause).foldl scanClauseStep (.ok leavesAcc)
+      = .ok (leavesAcc ++ (ls.map List.toArray).toArray) := by
+  induction ls with
+  | nil => intro leavesAcc; simp
+  | cons L ls ih =>
+    intro leavesAcc
+    obtain ⟨hLne, hLnz⟩ := hwf L (List.mem_cons_self ..)
+    have hwfs : ∀ x ∈ ls, x ≠ [] ∧ ∀ k ∈ x, k ≠ 0 := fun x hx => hwf x (List.mem_cons_of_mem _ hx)
+    rw [List.map_cons, List.foldl_cons]
+    have hstep : scanClauseStep (.ok leavesAcc) (leafClause L) = .ok (leavesAcc.push L.toArray) := by
+      unfold scanClauseStep
+      rw [mkLeaf_leafClause L hLnz]
+      simp only []
+      rw [if_neg (by simp [hLne])]
+    rw [hstep, ih hwfs]
+    congr 1; apply Array.toList_inj.mp; simp
+
+/-- Reducing `scanAssertsStep` on an `(assert (or …))` whose first clause is a list. -/
+lemma scanAssertsStep_or_of_listhead (numOut : Nat) (lo hi : Array (Option ℚ))
+    (objs : Array Objective) (leaves : Array (Array Int)) (ch : List Sexp) (ct : List Sexp) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves))
+        (.list [.atom "assert", .list (.atom "or" :: (Sexp.list ch) :: ct)])
+      = (match (Sexp.list ch :: ct).foldl scanClauseStep (.ok leaves) with
+         | .error er => .error er | .ok l' => .ok (lo, hi, objs, l')) := rfl
+
+lemma scanAssertsStep_orAssert (numOut : Nat) (lo hi : Array (Option ℚ)) (objs : Array Objective)
+    (leaves : Array (Array Int)) (ls : List (List Int)) (hne : ls ≠ [])
+    (hwf : ∀ L ∈ ls, L ≠ [] ∧ ∀ k ∈ L, k ≠ 0) :
+    scanAssertsStep numOut (.ok (lo, hi, objs, leaves)) (orAssertSexp ls)
+      = .ok (lo, hi, objs, leaves ++ (ls.map List.toArray).toArray) := by
+  obtain ⟨c0, rest, rfl⟩ := List.exists_cons_of_ne_nil hne
+  have hbody : orAssertSexp (c0 :: rest)
+      = .list [.atom "assert", .list (.atom "or" ::
+          Sexp.list (.atom "and" :: c0.map leafItemSexp) :: rest.map leafClause)] := by
+    simp [orAssertSexp, leafClause, List.map_cons]
+  rw [hbody, scanAssertsStep_or_of_listhead numOut lo hi objs leaves
+        (.atom "and" :: c0.map leafItemSexp) (rest.map leafClause),
+      show (Sexp.list (.atom "and" :: c0.map leafItemSexp) :: rest.map leafClause)
+          = (c0 :: rest).map leafClause from by simp [leafClause, List.map_cons],
+      clause_scan (c0 :: rest) hwf leaves]
+
+lemma finalizeBox_list (lo hi : Array (Option ℚ)) (fl fh : Nat → ℚ) (is : List Nat)
+    (h : ∀ i ∈ is, lo[i]! = some (fl i) ∧ hi[i]! = some (fh i)) :
+    ∀ (start : Array (ℚ × ℚ)),
+    is.foldl (finalizeBoxStep lo hi) (.ok start) = .ok (start ++ (is.map (fun i => (fl i, fh i))).toArray) := by
+  induction is with
+  | nil => intro start; simp
+  | cons i is' ih =>
+    intro start
+    obtain ⟨hloi, hhii⟩ := h i (List.mem_cons_self ..)
+    have hstep : finalizeBoxStep lo hi (.ok start) i = .ok (start.push (fl i, fh i)) := by
+      unfold finalizeBoxStep
+      rw [hloi, hhii]
+    rw [List.foldl_cons, hstep, ih (fun x hx => h x (List.mem_cons_of_mem _ hx))]
+    congr 1; apply Array.toList_inj.mp; simp
+
+/-- Fold identity: `scanDeclsStep` is a no-op on `assert` statements. -/
+lemma scanDecls_assertsIdent (es : List Sexp) (h : ∀ e ∈ es, ∃ body, e = .list [.atom "assert", body])
+    (acc : Int × Int × Array Nat) : es.foldl scanDeclsStep (.ok acc) = .ok acc := by
+  induction es generalizing acc with
+  | nil => rfl
+  | cons e es ih =>
+    obtain ⟨body, rfl⟩ := h e (List.mem_cons_self ..)
+    rw [List.foldl_cons, scanDeclsStep_assert acc body,
+      ih (fun x hx => h x (List.mem_cons_of_mem _ hx)) acc]
+
+lemma nDecls_fold (ns : List Nat) (mi mo : Int) :
+    ∀ (nsAcc : Array Nat),
+      (ns.map nDeclSexp).foldl scanDeclsStep (.ok (mi, mo, nsAcc)) = .ok (mi, mo, nsAcc ++ ns.toArray) := by
+  induction ns with
+  | nil => intro nsAcc; simp
+  | cons k ks ih =>
+    intro nsAcc
+    rw [List.map_cons, List.foldl_cons, scanDeclsStep_n (mi, mo, nsAcc) k, ih (nsAcc.push k)]
+    congr 1; apply Array.toList_inj.mp; simp
+
 end AptpCheck.Ast.AptpRoundtrip
