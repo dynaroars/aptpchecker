@@ -1065,7 +1065,7 @@ lemma good_ge : GoodStr ">=".toList := by
 lemma good_le : GoodStr "<=".toList := by
   refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
 lemma good_lt : GoodStr "<".toList := by
-  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc; exact ⟨by decide, by decide, by decide⟩
 lemma good_or : GoodStr "or".toList := by
   refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
 lemma good_and : GoodStr "and".toList := by
@@ -1127,7 +1127,7 @@ lemma WF_objSexp (o : RawObj) (hwf : WFObj o) : WF (objSexp o) := by
   cases o with
   | diff i j =>
     apply WF.list; intro e he
-    simp only [objSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he
     rcases he with rfl | rfl
     · exact wf_atom_lit good_assert
     · apply WF.list; intro e' he'
@@ -1138,7 +1138,7 @@ lemma WF_objSexp (o : RawObj) (hwf : WFObj o) : WF (objSexp o) := by
       · exact wf_atom_ofList _ (varNameChars_good 'Y' j ⟨⟨by decide, by decide⟩, by decide⟩)
   | ub i d =>
     apply WF.list; intro e he
-    simp only [objSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he
     rcases he with rfl | rfl
     · exact wf_atom_lit good_assert
     · apply WF.list; intro e' he'
@@ -1168,7 +1168,7 @@ lemma WF_leafItemSexp (k : Int) : WF (leafItemSexp k) := by
 
 lemma WF_leafClause (L : List Int) : WF (leafClause L) := by
   apply WF.list; intro e he
-  simp only [leafClause, List.mem_cons] at he
+  simp only [List.mem_cons] at he
   rcases he with rfl | he
   · exact wf_atom_lit good_and
   · obtain ⟨k, _, rfl⟩ := List.mem_map.mp he
@@ -1176,7 +1176,7 @@ lemma WF_leafClause (L : List Int) : WF (leafClause L) := by
 
 lemma WF_orAssertSexp (leaves : List (List Int)) : WF (orAssertSexp leaves) := by
   apply WF.list; intro e he
-  simp only [orAssertSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
   rcases he with rfl | rfl
   · exact wf_atom_lit good_assert
   · apply WF.list; intro e' he'
@@ -1623,7 +1623,7 @@ theorem parseAptp_printAptp (raw : RawProblem) (hwf : raw.WF) :
   have hM : ((raw.numOutputs : Int) - 1 + 1).toNat = raw.numOutputs := by omega
   unfold parseAptp
   rw [hread]
-  simp only [except_ok_bind, List.toList_toArray,
+  simp only [except_ok_bind,
     parseAll_fold (stmtsOf raw) (stmtsOf_wf raw hwf) #[], Array.empty_append,
     decls_pass raw, hN, hM, asserts_pass raw hwf, box_pass raw, decode]
 
