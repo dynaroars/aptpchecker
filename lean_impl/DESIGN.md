@@ -52,13 +52,17 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > (`Ast/NetRoundtrip.parseNet_printNet : parseNet (printNet r) = .ok (rawToNet r)`,
 > axiom-clean) — this required de-`partial`-izing the layer loop: `Ast/Net.parseLayers`
 > is now total via `parseLayersFuel` (fuel `= toks.length+1`, behavior-preserving,
-> regression-checked to give byte-identical exact outputs on the sample). So the
-> `.net` parser is **out of the trusted base**. All modules are wired into the root and
-> the full `lake build` passes (17137 jobs). **Pending**: (a) threading `rnd`/`uns`
-> into the automatic fold + assumption-set bookkeeping (Problem 2); (b) bridge the
-> dimension-indexed `MLP` soundness model to the executable `Array`-based
-> `Model/Encoder`; (c) verify the `.aptp` parser (still trusted); (d) Conv/CNN
-> encoding (future); (e) executable CLI wiring (Problem 3).
+> regression-checked to give byte-identical exact outputs on the sample). **The `.aptp`
+> parser is also FULLY verified** (`Ast/AptpRoundtrip.parseAptp_printAptp :
+> parseAptp (printAptp raw) = .ok (decode raw)`, axiom-clean) — this required
+> de-`partial`-izing the S-expression parser (`parseSexpFuel`/`parseListFuel`) and
+> rewriting the two-pass `parseAptp` loops as total `List.foldl`s (behavior-preserving,
+> regression-checked on both sample proofs). So **both parsers are out of the trusted
+> base**. All modules are wired into the root and the full `lake build` passes (17139
+> jobs). **Pending**: (a) threading `rnd`/`uns` into the automatic fold +
+> assumption-set bookkeeping (Problem 2); (b) bridge the dimension-indexed `MLP`
+> soundness model to the executable `Array`-based `Model/Encoder`; (c) Conv/CNN
+> encoding (future); (d) executable CLI wiring (Problem 3).
 
 ---
 

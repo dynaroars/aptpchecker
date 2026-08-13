@@ -542,22 +542,25 @@ required making the layer loop \emph{total}: the original \code{partial def} is 
 to the kernel (no equational lemmas), so we rewrote it as a fuel-structural recursion
 (\code{parseLayersFuel}, fuel $=$ token count $+1$), behaviour-preserving
 (regression-checked: \code{parseNet} yields byte-identical exact outputs on the
-sample). The `.net` parser is thus out of the trusted base.
+sample). The \code{.aptp} proof-tree reader is verified the same way
+(\code{parseAptp\_printAptp}), which additionally required de-\code{partial}-izing the
+S-expression parser and rewriting the two-pass \code{parseAptp} loops as total
+\code{List.foldl}s (behaviour-preserving; regression-checked on both sample proofs).
+\textbf{Both} parsers are thus out of the trusted base.
 
 Remaining, and none requiring trust in \scip{} or floats: threading
 \code{rnd}/\code{uns} into the \emph{automatic} replay fold (they are proved as
 standalone lemmas) with assumption-set bookkeeping; bridging the dimension-indexed
-\code{MLP} soundness model to the executable \code{Array}-based encoder; verifying the
-\code{.aptp} parser (as done for \code{.net}); Conv/CNN encoding; and the executable
-CLI wiring into Fig.~\ref{fig:thm}.
+\code{MLP} soundness model to the executable \code{Array}-based encoder; Conv/CNN
+encoding; and the executable CLI wiring into Fig.~\ref{fig:thm}.
 
 \paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
-arithmetic; the \code{.aptp} parser (differential-fuzzed against the reference Python
-parser; verification is future work)---the \code{.net} parser is now \emph{fully
-verified} (\code{parseNet\_printNet}) and out of the TCB; and the \code{.net} file
-faithfully representing the intended network (its generation is out of scope---the
-tool reads only the exact format). \scip, SoPlex, the \vipr{} certificate, and any
-certificate-completion tooling are \emph{not} trusted.
+arithmetic, and the \code{.net} file faithfully representing the intended network (its
+generation is out of scope---the tool reads only the exact format). \textbf{Both}
+input parsers---the network file and the proof-tree file---are now \emph{fully
+verified} (\code{parseNet\_printNet}, \code{parseAptp\_printAptp}) and out of the TCB.
+\scip, SoPlex, the \vipr{} certificate, and any certificate-completion tooling are
+\emph{not} trusted.
 
 \section{Design rationale: why each step is needed}\label{sec:rationale}
 

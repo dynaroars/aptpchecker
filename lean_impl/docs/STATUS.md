@@ -32,8 +32,9 @@ compiled code.
   external solver's proof in exact arithmetic are proven correct.
 - **The end-to-end argument.** The top-level reasoning that combines coverage and
   per-piece refutation into the final guarantee is proven.
-- **The network file reader.** The parser that reads the exact-network input file
-  is fully verified, so it no longer has to be trusted.
+- **Both input-file readers.** The parser for the exact-network file *and* the
+  parser for the proof-tree file are both fully verified (each proven to be the
+  exact inverse of a printer), so neither has to be trusted anymore.
 
 The exact-arithmetic groundwork is also cross-checked against an independent
 implementation and matches exactly, and the input-file readers reproduce the
@@ -55,10 +56,6 @@ original Python tool's output on the sample files.
   a "flatten" step (reshaping data) is treated as doing nothing, and back-to-back
   linear layers (or back-to-back ReLUs) are merged. **Convolutional networks
   (CNNs) are not covered yet** — that is planned future work.
-
-- **The proof-tree file reader is still trusted, not yet verified.** It has been
-  stress-tested against the original Python parser but not formally proven correct
-  (unlike the network-file reader, which is).
 
 - **Solver certificate replay is not yet fully automatic.** Two of the three kinds
   of certificate steps are proven correct on their own, but the automatic
