@@ -20,3 +20,4 @@ import AptpCheck.Ast.Vipr
 import AptpCheck.Ast.NetRoundtrip
 import AptpCheck.Ast.AptpRoundtrip
 import AptpCheck.Pipeline.ViprCheck
+import AptpCheck.Pipeline.ViprFlatCheck
