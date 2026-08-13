@@ -255,12 +255,11 @@ Farkas' lemma; it never re-solves.
 
 \section{A worked example}\label{sec:example}
 
-We instantiate every step on the toy network \code{sample.onnx} and proof
-\code{sample.aptp} shipped with the reference tool. All arithmetic is exact;
-decimals such as $0.2$ are shown for readability but the checker carries the exact
-binary32 value $\mathtt{0x3E4CCCCD}=13421773/67108864$. The exact-$\Q$ network
-outputs below are validated bit-for-bit against an independent rational forward
-pass.
+We instantiate \emph{every} step of the pipeline on the toy network
+\code{sample.onnx} and proof \code{sample.aptp}, and for each step we name the \lean{}
+object that computes it \emph{and} the lemma that discharges it, sketching the proof.
+All arithmetic is exact; decimals such as $0.2$ are shown for readability but the
+checker carries the exact binary32 value $\mathtt{0x3E4CCCCD}=13421773/67108864$.
 
 \paragraph{The network.} A $2$-input, $2$-output ReLU MLP
 $\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}\!\to\!\relu\!\to\!\mathrm{Lin}$ with
@@ -283,15 +282,63 @@ $p^{(1)}$ and $N_3,N_4$ of $p^{(2)}$.
 goal is $\forall x\in\dom.\ y_0-y_1>0$ (i.e.\ $Y_0>Y_1$). Our parser returns exactly
 this ($\dom$, $c$, $\rho$) and the leaves below.
 
-\paragraph{Neuron stability.} Propagating $\dom$ with the exact interval rule
+\paragraph{Step 1 --- exact weight decoding (\code{float32ToRat}).} The \code{.net}
+file stores each weight as its raw 32-bit pattern (\emph{no} decimal re-parse), e.g.\
+$0.2$ as $\mathtt{0x3E4CCCCD}$. \code{float32ToRat} splits sign/exponent/mantissa and
+returns the exact dyadic $(-1)^s(2^{23}+m)2^{e-150}$; for $0.2$ this is
+$13421773/67108864$. \emph{Proof obligation:} none beyond definition---the decode is
+exact by construction, so the \lean{} network's weights are \emph{bit-identical} to the
+verifier's (\code{\#eval} sanity: $\mathtt{0x3F800000}\!\mapsto\!1$,
+$\mathtt{0xC0000000}\!\mapsto\!-2$, $\mathtt{0x3F000000}\!\mapsto\!1/2$). This is why
+the whole checker can be exact.
+
+\paragraph{Step 2 --- verified parsing (\code{parseNet}, \code{parseAptp}).}
+\code{parseNet} reads the \code{.net} file to a \code{Network}; \code{parseAptp} reads
+the \code{.aptp} file to the \code{Problem} above. \emph{Both are proved faithful} by
+round-trip: \code{parseNet\_printNet}: \code{parseNet (printNet r) = .ok (rawToNet r)},
+and \code{parseAptp\_printAptp} likewise. \emph{Proof method:} the imperative loops are
+first made total (a \code{partial def} layer parser becomes a fuel-structural
+recursion; two \code{Id.run do} passes become \code{List.foldl}s), which is
+behaviour-preserving (regression-checked to give byte-identical results on the
+samples); then each stage---the tokenizer, the statement reader, the hex/decimal
+number decode, and every per-construct analyser (\code{declare}, box, output row,
+DNF clause)---is proved to invert a matching printer, and these compose by induction
+over the statement list. On the sample this yields $\dom=[-2,2]\times[-1,1]$,
+$c=(1,-1)$, $\rho=0$, neurons $\{1,2,3,4\}$, leaves
+$\{[-4],[-2,4],[2,1,4],[2,-1,4]\}$. Both parsers are therefore out of the trusted base.
+
+\paragraph{Step 3 --- exact evaluation and the \code{Network}$\to$\code{MLP} bridge.}
+\code{Network.eval} folds the \code{Array}-based layers to compute $\net(x)$ exactly
+(validated bit-for-bit against an independent \code{Fraction} forward pass, e.g.\
+$\net(1,1)=(-25991905743211293818487/75557863725914323419136,\dots)$). \code{toMLP}
+converts the parsed network to the dimension-indexed \code{MLP} normal form
+$\mathrm{cons}\,W_0 b_0(\mathrm{cons}\,W_2 b_2(\mathrm{last}\,W_4 b_4))$; on the sample
+\code{\#eval toMLP} returns \code{some} with \code{inDim}$=$\code{outD}$=2$.
+\code{toMLP\_eval} proves \code{Network.eval} agrees with \code{MLP.eval}. \emph{Proof:}
+a per-layer agreement lemma (executable \code{Linear.apply} $\leftrightarrow$
+\code{preAct}; $\relu\!\circ\!\mathrm{Linear}\leftrightarrow$ \code{postAct}, bridging
+\code{Array.foldl} vs.\ \code{Finset}-sums), then induction over the layer list. This
+is what lets the soundness theorem (stated on \code{MLP}) apply to the \emph{parsed,
+runnable} network.
+
+\paragraph{Step 4 --- neuron stability (interval bounds).} Propagating $\dom$ with the
+exact interval rule
 $\underline v=W^{+}\underline u+W^{-}\overline u+b$,
 $\overline v=W^{+}\overline u+W^{-}\underline u+b$ gives
 \[
 N_1\!\in\![-1.7,0.7],\quad N_2\!\in\![-0.5,1.1],\quad
 N_3\!\in\![-0.43,0.86],\quad N_4\!\in\![-0.1,1.31].
 \]
-\emph{All four neurons are unstable.} These loose bounds supply the big-$M$
-constants; any tighter sound bound only helps.
+\emph{All four neurons are unstable.} \emph{Proof (\code{affine\_interval\_sound}):}
+split each weight $w$ into $w^{+}=\max(w,0)\ge0$ and $w^{-}=\min(w,0)\le0$; then for
+$x$ in the box, $w^{+}\underline u\le w^{+}x\le w^{+}\overline u$ (multiply the box
+bound by a nonnegative scalar) and $w^{-}\overline u\le w^{-}x\le w^{-}\underline u$
+(nonpositive scalar flips), so each term is sandwiched; summing with
+\code{Finset.sum\_le\_sum} and using $w^{+}+w^{-}=w$ (\code{max\_add\_min}) gives the
+two bounds. A neuron with $\underline v\ge0$ (resp.\ $\overline v\le0$) would be folded
+to the identity (resp.\ constant $0$) by \code{stable\_active}/\code{stable\_inactive};
+here none is stable, so all four keep big-$M$ gadgets, and these bounds supply their
+big-$M$ constants (any tighter sound bound only helps).
 
 \paragraph{The proof tree.} \code{sample.aptp} asserts a four-leaf DNF; our parser
 yields $\leaves=\{[-4],\,[-2,4],\,[2,1,4],\,[2,-1,4]\}$ over the signs of
@@ -303,30 +350,79 @@ $N_1,N_2,N_4$:
 The proof never branches on $N_3$, which therefore stays a free binary neuron inside
 every leaf's MILP---a concrete reason the leaves are MILPs, not LPs.
 
-\paragraph{Coverage.} At any $x$ each pre-activation is $\ge 0$ or $<0$, so
-$(N_1,N_2,N_4)\in\{0,1\}^3$ is \emph{some} assignment; we need the DNF to be a
-tautology over that cube. Case split: $N_4{=}0\Rightarrow\leaf_1$; else $N_4{=}1$ and
-$N_2{=}0\Rightarrow\leaf_2$; else $N_2{=}1$ with $N_1{=}1\Rightarrow\leaf_3$,
-$N_1{=}0\Rightarrow\leaf_4$. All eight assignments are covered, so the leaves tile
-$\dom$ (Lemma~\ref{lem:cover}). $N_3$ is irrelevant: both its signs lie inside each
-region.
+\paragraph{Step 6 --- coverage (\code{checkCoverage}/\code{coverage\_sound}).} At any
+$x$ each pre-activation is $\ge 0$ or $<0$, so $(N_1,N_2,N_4)\in\{0,1\}^3$ is
+\emph{some} assignment; we need the DNF to be a tautology over that cube. Case split:
+$N_4{=}0\Rightarrow\leaf_1$; else $N_4{=}1$ and $N_2{=}0\Rightarrow\leaf_2$; else
+$N_2{=}1$ with $N_1{=}1\Rightarrow\leaf_3$, $N_1{=}0\Rightarrow\leaf_4$. All eight
+assignments are covered. \code{checkCoverage} decides this by enumerating the cube of
+the mentioned neurons (\code{assignmentsOn} over the deduplicated neuron list) and
+checking each is satisfied by some leaf. \emph{Proof (\code{coverage\_sound}):} given
+any $\sigma:\N\to\code{Bool}$, \code{assignmentsOn} contains an enumerated assignment
+agreeing with $\sigma$ on the mentioned neurons (completeness by induction using
+\code{Function.update}, needing \code{Nodup} from \code{dedup}); since \code{satLeaf}
+reads $\sigma$ only at a leaf's own neurons, if the check passed then $\sigma$ too
+satisfies some leaf. So the leaves tile $\dom$ (Lemma~\ref{lem:cover}). $N_3$ is
+irrelevant: it is not mentioned, and both its signs lie inside each region. This is a
+sound over-approximation---a tautology over the free cube is sufficient (every real
+sign vector is some cube point) though not necessary.
 
-\paragraph{Per-leaf refutation.} For each leaf we prove the system
-$\{x\in\dom\}\cup\{\text{affine equalities}\}\cup\{\text{big-}M\ \relu\}\cup
-\{\text{leaf sign fixings}\}\cup\{c\cdot y\le 0\}$ infeasible. Because $N_3$ keeps its
-binary, this is a MILP; exact \scip{} emits a \vipr{} tree of \code{lin}/\code{rnd}/%
-\code{uns} steps that we replay in $\Q$, bottoming out in Lemma~\ref{lem:farkas}. To
-see a certificate concretely, fix the \emph{complete} pattern
-$N_1,N_2,N_3,N_4\ge 0$: every \relu{} is the identity and $\net$ is affine, with
-\[
-y_0-y_1 \;=\; 0.2\,h^{(2)}_0-0.3\,h^{(2)}_1+0.1
-\;=\; 0.2\,p^{(2)}_0-0.3\,p^{(2)}_1+0.1,
-\]
-an explicit affine $\alpha x_0+\beta x_1+\gamma$ after substituting
-$p^{(2)}=W_2h^{(1)}+b_2$, $h^{(1)}=p^{(1)}=W_0x+b_0$; refuting $y_0-y_1\le 0$ is then a
-single \code{lin} step (a nonnegative combination of the box and sign bounds yielding
-$0\le-\varepsilon$). This LP-only, complete-pattern mode is the earliest milestone;
-the actual partial leaves add one integer split (\code{uns}) for $N_3$.
+\paragraph{Step 7 --- encoding a leaf and its soundness (\code{encoding\_overapprox\_mlp}).}
+Take leaf $\leaf_3=[2,1,4]$ ($N_2,N_1,N_4$ active, $N_3$ unbranched). The encoder emits
+23 rows plus the objective, over variables $v_0,v_1$ (inputs), $v_2,v_3$ (pre-acts of
+$N_1,N_2$), $v_4,v_5$ (pre-acts of $N_3,N_4$), $v_6$ (post-act of $N_3$) with binary
+$v_7$, and $v_8,v_9$ (outputs): the box ($v_0\le2$, $-v_0\le2$, $v_1\le1$, $-v_1\le1$);
+per-layer affine equalities, each as two $\le$-rows, e.g.\ $v_2=-0.5v_0+0.2v_1-0.5$ and
+$v_4=-0.9v_2+0.6v_3+0.2$ (an active neuron passes its pre-var through, so
+$\mathrm{post}(N_1)=v_2$, etc.); the four big-$M$ rows for the unbranched $N_3$
+($v_6\le v_4-\underline u(1-v_7)$, $v_4\le v_6$, $v_6\le\overline u\,v_7$, $0\le v_6$,
+with $[\underline u,\overline u]=[-0.43,0.86]$ from Step~4); the leaf's sign rows
+$-v_2\le0$, $-v_3\le0$, $-v_5\le0$ ($N_1,N_2,N_4\ge0$); and the objective row
+$v_8-v_9\le\rho$. \emph{Soundness (\code{encoding\_overapprox\_mlp}):} the real
+trace---$v_0,v_1=x$, each $v$ its true pre/post value,
+$v_7=[\,\mathrm{pre}(N_3)\ge0\,]$---satisfies every row and evaluates the objective form
+to $c\cdot\net(x)$. By induction over the \code{MLP} layers, each row-type is
+discharged by its lemma: box by \code{boxRows\_sat}; affine equalities by
+\code{affEqRows\_sat} (they hold definitionally from \code{preAct}); the big-$M$ rows by
+\code{reluRows\_sat} (\code{reluBigM\_sound}: with $v_6=\max(\mathrm{pre},0)$,
+$v_7=[\mathrm{pre}\ge0]$, and the Step-4 bounds $\underline u\le\mathrm{pre}\le\overline
+u$, all four inequalities hold---a two-case check on the sign of $\mathrm{pre}$); the
+sign rows by \code{leafRows\_sat} (they hold because $x\in\reg(\leaf)$); the objective
+by \code{fuse\_linear} ($c\cdot(Wx{+}b)=(\sum_i c_iW_{i\cdot})x+\sum_i c_ib_i$). The
+valuation is \code{MLP.trace} and \code{MLP.Agree} routes each variable id to its trace
+value. The over-approximation direction (feasible set $\supseteq$ real behaviour) is
+essential: a looser encoding is harmless, a tighter-than-reality one unsound.
+
+\paragraph{Step 8 --- refuting the leaf with an exact certificate.} With the negated
+goal $v_8-v_9\le\rho$ present, the leaf is a MILP (the binary $v_7$ survives). Exact
+\scip{} proves it infeasible and emits a \vipr{} file. We model the proof as a
+\code{RefTree} (a Farkas \code{leaf}, an integer \code{split}, or a round/derive node)
+and validate it with the \code{Bool} \code{checkRefTree}; \code{refTree\_sound} proves a
+valid tree $\Rightarrow$ no integer-valued valuation satisfies the rows. \emph{Proof:} a
+Farkas leaf is \code{farkas\_le}---from $y\ge0$, $y^{\!\top}\!A=0$, $y^{\!\top}b<0$ and a
+feasible $x$, $0=y^{\!\top}\!Ax\le y^{\!\top}b<0$; a \code{split} on the integer $v_7$
+uses \code{int\_split} ($v_7\le0\lor v_7\ge1$) and refutes each branch recursively; a
+round node uses \code{rnd\_sound}. Concretely, for the illustrative sub-instance
+$2x\ge1\wedge2x\le1$ (feasible at $x=\tfrac12$, no integer $x$) the tree splits $x$ at
+$0$: the $x\le0$ branch dies by $2(x\le0)+1(2x\ge1)\Rightarrow0\le-1$ and $x\ge1$ by
+$2(x\ge1)+1(2x\le1)\Rightarrow0\le-1$; \code{checkRefTree} returns \code{true}
+(verified). \code{vipr\_infeasible} composes this with the parser: a tree validated
+against \code{parseVipr}'s \code{CON} rows proves that system infeasible. (For a
+\emph{complete} pattern $N_1,\dots,N_4\ge0$, $\net$ is affine---
+$y_0-y_1=0.2\,p^{(2)}_0-0.3\,p^{(2)}_1+0.1$, an explicit $\alpha x_0+\beta x_1+\gamma$
+after substituting $p^{(2)}=W_2h^{(1)}+b_2$, $h^{(1)}=W_0x+b_0$---and the leaf needs a
+single Farkas leaf, no split.)
+
+\paragraph{Step 9 --- composition (\code{certified\_sound\_*}).}
+\code{refute\_of\_cert} turns Step~8's infeasibility of ``rows $\wedge\ c\cdot y\le\rho$''
+into $c\cdot\net(x)>\rho$ on $\reg(\leaf)$, using Step~7: the real trace satisfies the
+rows with objective $=c\cdot\net(x)$, so it cannot also satisfy $c\cdot y\le\rho$, whence
+$c\cdot\net(x)>\rho$. \code{certified\_sound\_mlp\_satLeaf} phrases this per-leaf
+obligation through the coverage \code{satLeaf} interface so it plugs directly into
+\code{certified\_sound\_abstract} (coverage $\oplus$ per-leaf refutation $\Rightarrow
+\forall x\in\dom,\ c\cdot\net(x)>\rho$; Fig.~\ref{fig:thm}); and
+\code{certified\_sound\_network} transports the conclusion onto the \emph{parsed}
+\code{Network} via \code{toMLP\_eval} (Step~3).
 
 \paragraph{Verdict.} $\sound\iff$ coverage $\wedge$ every leaf refuted; composing
 (Theorem~\ref{thm:main}) gives $Y_0>Y_1$ on all of $\dom$. The property is tight:
