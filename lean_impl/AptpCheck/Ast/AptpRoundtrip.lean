@@ -1443,4 +1443,188 @@ lemma replicate_none_get! (n i : Nat) (h : i < n) :
   rw [Array.getElem!_eq_getD]
   simp [Array.getD, h]
 
+/-! ## End-to-end `parseAptp ∘ printAptp` round-trip
+
+A `RawProblem` carries the *source* form of a problem (decimals as `RawDec`,
+neurons/objectives/leaves as lists) alongside its `Problem` interpretation
+(`decode`). `printAptp` renders it as a canonical `.aptp` file; the main theorem
+shows `parseAptp` recovers exactly `decode raw` for well-formed `raw`. -/
+
+/-- The source form of a checkable problem. `loDof`/`hiDof` give the (decimal)
+lower/upper bound for each input; `objs`/`leaves` are the output rows and DNF
+leaves. -/
+structure RawProblem where
+  numInputs : Nat
+  numOutputs : Nat
+  neurons : List Nat
+  loDof : Nat → RawDec
+  hiDof : Nat → RawDec
+  objs : List RawObj
+  leaves : List (List Int)
+
+/-- Well-formedness: the box has exactly one well-formed `(lo,hi)` per input,
+each objective is a single well-formed row, and the leaves are nonempty, use
+only nonzero signed neuron ids, and reference declared neurons. -/
+structure RawProblem.WF (raw : RawProblem) : Prop where
+  loWF : ∀ i < raw.numInputs, (raw.loDof i).WF
+  hiWF : ∀ i < raw.numInputs, (raw.hiDof i).WF
+  objsWF : ∀ o ∈ raw.objs, WFObj o
+  leavesNe : raw.leaves ≠ []
+  leavesWF : ∀ L ∈ raw.leaves, L ≠ [] ∧ ∀ k ∈ L, k ≠ 0
+  leavesRef : ∀ L ∈ raw.leaves, ∀ k ∈ L, k.natAbs ∈ raw.neurons
+
+/-- The `Problem` a `RawProblem` denotes. -/
+def decode (raw : RawProblem) : Problem :=
+  { numInputs := raw.numInputs,
+    numOutputs := raw.numOutputs,
+    neurons := raw.neurons.toArray,
+    box := ((List.range raw.numInputs).map (fun i => ((raw.loDof i).value, (raw.hiDof i).value))).toArray,
+    objectives := (raw.objs.map (decodeObj raw.numOutputs)).toArray,
+    leaves := (raw.leaves.map List.toArray).toArray }
+
+/-- The declaration statements (`declare-const X_i`/`Y_j`, `declare-pwl N_k`). -/
+def declStmts (raw : RawProblem) : List Sexp :=
+  (List.range raw.numInputs).map xDeclSexp
+  ++ (List.range raw.numOutputs).map yDeclSexp
+  ++ raw.neurons.map nDeclSexp
+
+/-- The assert statements (box lower/upper bounds, objectives, the DNF `or`). -/
+def assertStmts (raw : RawProblem) : List Sexp :=
+  (List.range raw.numInputs).map (fun i => boxLoSexp i (raw.loDof i))
+  ++ (List.range raw.numInputs).map (fun i => boxHiSexp i (raw.hiDof i))
+  ++ raw.objs.map objSexp
+  ++ [orAssertSexp raw.leaves]
+
+/-- All statements of a printed problem, declarations then asserts. -/
+def stmtsOf (raw : RawProblem) : List Sexp := declStmts raw ++ assertStmts raw
+
+/-- The lower-bound array produced by folding the box-lower asserts. -/
+def loArr (raw : RawProblem) : Array (Option ℚ) :=
+  (List.range raw.numInputs).foldl (fun a i => a.set! i (some (raw.loDof i).value))
+    (List.replicate raw.numInputs (none : Option ℚ)).toArray
+/-- The upper-bound array produced by folding the box-upper asserts. -/
+def hiArr (raw : RawProblem) : Array (Option ℚ) :=
+  (List.range raw.numInputs).foldl (fun a i => a.set! i (some (raw.hiDof i).value))
+    (List.replicate raw.numInputs (none : Option ℚ)).toArray
+
+/-- Render a `RawProblem` as a canonical `.aptp` file: one statement per line,
+each newline-terminated. -/
+def printAptp (raw : RawProblem) : String :=
+  String.ofList (joinNL ((stmtsOf raw).map stmtChars))
+
+lemma assertStmts_isAssert (raw : RawProblem) :
+    ∀ e ∈ assertStmts raw, ∃ body, e = .list [.atom "assert", body] := by
+  intro e he
+  simp only [assertStmts, List.mem_append, List.mem_map, List.mem_singleton] at he
+  rcases he with ((h | h) | h) | h
+  · obtain ⟨i, _, rfl⟩ := h; exact ⟨_, rfl⟩
+  · obtain ⟨i, _, rfl⟩ := h; exact ⟨_, rfl⟩
+  · obtain ⟨o, _, rfl⟩ := h; cases o <;> exact ⟨_, rfl⟩
+  · subst h; exact ⟨_, rfl⟩
+
+/-- Every printed statement of a well-formed problem is a `WF` S-expression. -/
+lemma stmtsOf_wf (raw : RawProblem) (hwf : raw.WF) : ∀ e ∈ stmtsOf raw, WF e := by
+  intro e he
+  simp only [stmtsOf, declStmts, assertStmts, List.mem_append, List.mem_map,
+    List.mem_singleton] at he
+  rcases he with ((h | h) | h) | (((h | h) | h) | h)
+  · obtain ⟨i, _, rfl⟩ := h; exact WF_xDeclSexp i
+  · obtain ⟨j, _, rfl⟩ := h; exact WF_yDeclSexp j
+  · obtain ⟨k, _, rfl⟩ := h; exact WF_nDeclSexp k
+  · obtain ⟨i, hi, rfl⟩ := h; exact WF_boxLoSexp i _ (hwf.loWF i (List.mem_range.mp hi))
+  · obtain ⟨i, hi, rfl⟩ := h; exact WF_boxHiSexp i _ (hwf.hiWF i (List.mem_range.mp hi))
+  · obtain ⟨o, ho, rfl⟩ := h; exact WF_objSexp o (hwf.objsWF o ho)
+  · subst h; exact WF_orAssertSexp raw.leaves
+
+/-- **Declares pass.** Folding `scanDeclsStep` over all printed statements
+recovers `(numInputs-1, numOutputs-1, neurons)` (asserts are skipped). -/
+lemma decls_pass (raw : RawProblem) :
+    (stmtsOf raw).foldl scanDeclsStep (.ok (-1, -1, #[]))
+      = .ok ((raw.numInputs : Int) - 1, (raw.numOutputs : Int) - 1, raw.neurons.toArray) := by
+  rw [stmtsOf, List.foldl_append, declStmts, List.foldl_append, List.foldl_append,
+    xDecls_fold (List.range raw.numInputs) (-1) #[] (-1), foldl_max_range,
+    yDecls_fold (List.range raw.numOutputs) ((raw.numInputs : Int) - 1) #[] (-1), foldl_max_range,
+    nDecls_fold raw.neurons ((raw.numInputs : Int) - 1) ((raw.numOutputs : Int) - 1) #[],
+    scanDecls_assertsIdent (assertStmts raw) (assertStmts_isAssert raw)]
+  simp
+
+/-- **Asserts pass.** Folding `scanAssertsStep` over all printed statements
+recovers the box lower/upper arrays, the objective rows, and the DNF leaves
+(declares are skipped). -/
+lemma asserts_pass (raw : RawProblem) (hwf : raw.WF) :
+    (stmtsOf raw).foldl (scanAssertsStep raw.numOutputs)
+        (.ok ((List.replicate raw.numInputs (none : Option ℚ)).toArray,
+              (List.replicate raw.numInputs (none : Option ℚ)).toArray, #[], #[]))
+      = .ok (loArr raw, hiArr raw,
+             (raw.objs.map (decodeObj raw.numOutputs)).toArray,
+             (raw.leaves.map List.toArray).toArray) := by
+  have hloWF : ∀ i ∈ List.range raw.numInputs, (raw.loDof i).WF :=
+    fun i hi => hwf.loWF i (List.mem_range.mp hi)
+  have hhiWF : ∀ i ∈ List.range raw.numInputs, (raw.hiDof i).WF :=
+    fun i hi => hwf.hiWF i (List.mem_range.mp hi)
+  have hbound : ∀ i ∈ List.range raw.numInputs,
+      i < ((List.replicate raw.numInputs (none : Option ℚ)).toArray).size :=
+    fun i hi => by rw [replicate_none_size]; exact List.mem_range.mp hi
+  have hnone : ∀ i ∈ List.range raw.numInputs,
+      ((List.replicate raw.numInputs (none : Option ℚ)).toArray)[i]! = none :=
+    fun i hi => replicate_none_get! _ i (List.mem_range.mp hi)
+  -- declares are no-ops for the asserts pass
+  rw [stmtsOf, List.foldl_append, declStmts, List.foldl_append, List.foldl_append,
+    scanAsserts_xdeclFold raw.numOutputs (List.range raw.numInputs),
+    scanAsserts_ydeclFold raw.numOutputs (List.range raw.numOutputs),
+    scanAsserts_ndeclFold raw.numOutputs raw.neurons]
+  -- process the assert segments in order
+  rw [assertStmts, List.foldl_append, List.foldl_append, List.foldl_append,
+    boxLo_scan raw.numOutputs (List.range raw.numInputs) raw.loDof hloWF List.nodup_range
+      (List.replicate raw.numInputs (none : Option ℚ)).toArray #[] #[]
+      (List.replicate raw.numInputs (none : Option ℚ)).toArray hbound hnone]
+  rw [boxHi_scan raw.numOutputs (List.range raw.numInputs) raw.hiDof hhiWF List.nodup_range
+      _ #[] #[] (List.replicate raw.numInputs (none : Option ℚ)).toArray hbound hnone]
+  rw [objs_scan raw.numOutputs raw.objs hwf.objsWF _ _ #[] #[]]
+  rw [List.foldl_cons, List.foldl_nil,
+    scanAssertsStep_orAssert raw.numOutputs _ _ _ #[] raw.leaves
+      hwf.leavesNe hwf.leavesWF]
+  simp [loArr, hiArr]
+
+/-- **Box-finalize pass.** With the folded lower/upper arrays, `finalizeBoxStep`
+produces the `(lo,hi)` pair array. -/
+lemma box_pass (raw : RawProblem) :
+    (List.range raw.numInputs).foldl (finalizeBoxStep (loArr raw) (hiArr raw)) (.ok #[])
+      = .ok ((List.range raw.numInputs).map
+          (fun i => ((raw.loDof i).value, (raw.hiDof i).value))).toArray := by
+  have hbnd : ∀ x ∈ List.range raw.numInputs,
+      x < ((List.replicate raw.numInputs (none : Option ℚ)).toArray).size :=
+    fun x hx => by rw [replicate_none_size]; exact List.mem_range.mp hx
+  have hget : ∀ i ∈ List.range raw.numInputs,
+      (loArr raw)[i]! = some (raw.loDof i).value ∧ (hiArr raw)[i]! = some (raw.hiDof i).value := by
+    intro i hi
+    refine ⟨?_, ?_⟩
+    · exact foldl_set_get (List.range raw.numInputs) _ (fun i => some (raw.loDof i).value) i hi
+        List.nodup_range hbnd
+    · exact foldl_set_get (List.range raw.numInputs) _ (fun i => some (raw.hiDof i).value) i hi
+        List.nodup_range hbnd
+  rw [finalizeBox_list (loArr raw) (hiArr raw) (fun i => (raw.loDof i).value)
+      (fun i => (raw.hiDof i).value) (List.range raw.numInputs) hget #[]]
+  simp
+
+/-- **Top-level round-trip.** For any well-formed `RawProblem`, parsing its
+printed form recovers exactly the decoded `Problem`. Composes the statement
+reader, the S-expression parser, and the declares/asserts/box passes. -/
+theorem parseAptp_printAptp (raw : RawProblem) (hwf : raw.WF) :
+    parseAptp (printAptp raw) = .ok (decode raw) := by
+  have hclean : ∀ l ∈ (stmtsOf raw).map stmtChars, CleanBalLine l := by
+    intro l hl
+    obtain ⟨e, he, rfl⟩ := List.mem_map.mp hl
+    exact stmtChars_cleanBal e (stmtsOf_wf raw hwf e he)
+  have hread : readStatementsFold (printAptp raw) = .ok ((stmtsOf raw).map stmtChars).toArray :=
+    readStatementsFold_multi ((stmtsOf raw).map stmtChars) (printAptp raw) hclean
+      (by rw [printAptp, String.toList_ofList])
+  have hN : ((raw.numInputs : Int) - 1 + 1).toNat = raw.numInputs := by omega
+  have hM : ((raw.numOutputs : Int) - 1 + 1).toNat = raw.numOutputs := by omega
+  unfold parseAptp
+  rw [hread]
+  simp only [except_ok_bind, List.toList_toArray,
+    parseAll_fold (stmtsOf raw) (stmtsOf_wf raw hwf) #[], Array.empty_append,
+    decls_pass raw, hN, hM, asserts_pass raw hwf, box_pass raw, decode]
+
 end AptpCheck.Ast.AptpRoundtrip
