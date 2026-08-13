@@ -288,6 +288,23 @@ branches `x_i ≤ k` and `x_i ≥ k+1` (`split`). -/
 inductive RefTree where
   | leaf (comb : List (ℚ × Le))
   | split (i : Nat) (k : ℤ) (lo hi : RefTree)
+  | derive (comb : List (ℚ × Le)) (rnd : Bool) (sub : RefTree)
+
+/-- The row a `derive` node introduces: the nonnegative combination `combine comb`,
+optionally with its right-hand side rounded down (a `rnd`/cut step). -/
+def deriveRow (comb : List (ℚ × Le)) (rnd : Bool) : Le :=
+  if rnd then ⟨combineForm comb, ((⌊(combine comb).rhs⌋ : ℤ) : ℚ)⟩ else combine comb
+
+/-- Decidable "is an integer" for `ℚ`. -/
+def isIntValB (q : ℚ) : Bool := q.den == 1
+
+theorem isIntValB_sound {q : ℚ} (h : isIntValB q = true) : IsIntVal q := by
+  have hden : q.den = 1 := by simp only [isIntValB, beq_iff_eq] at h; exact h
+  have key : ((q.num : ℤ) : ℚ) = q := by
+    have hnd := Rat.num_div_den q
+    rw [hden] at hnd
+    simpa using hnd
+  exact ⟨q.num, key.symm⟩
 
 /-- Validity of a refutation tree against a row set and an integrality predicate.
 `leaf comb`: nonnegative multipliers on rows drawn from `rows`, whose combination
@@ -302,6 +319,10 @@ def RefTree.Valid (isInt : Nat → Prop) : List Le → RefTree → Prop
       isInt i ∧
       RefTree.Valid isInt (leLower i (k : ℚ) :: rows) lo ∧
       RefTree.Valid isInt (leUpper i (k : ℚ) :: rows) hi
+  | rows, .derive comb rnd sub =>
+      (∀ p ∈ comb, 0 ≤ p.1) ∧ (∀ p ∈ comb, p.2 ∈ rows) ∧
+      (rnd = true → ∀ t ∈ combineForm comb, IsIntVal t.coeff ∧ isInt t.idx) ∧
+      RefTree.Valid isInt (deriveRow comb rnd :: rows) sub
 
 /-- **The proof-by-cases checker is sound.** A valid refutation tree witnesses that no
 valuation whose integer-constrained variables are integral can satisfy `rows` — i.e.
@@ -331,6 +352,25 @@ theorem refTree_sound (isInt : Nat → Prop) :
         rcases List.mem_cons.mp hc with rfl | hc
         · exact (sat_leUpper a i (k : ℚ)).mpr hhi
         · exact hrows c hc
+  | derive comb rnd sub ihsub =>
+      intro hval a hint hrows
+      obtain ⟨hnn, hused, hIntCond, hvsub⟩ := hval
+      have hlin : Le.sat (combine comb) a :=
+        lin_sound comb a hnn (fun p hp => hrows p.2 (hused p hp))
+      have hd : Le.sat (deriveRow comb rnd) a := by
+        cases rnd with
+        | false => simpa [deriveRow] using hlin
+        | true =>
+            have hInt : IsIntVal ((combineForm comb).eval a) :=
+              LinForm.eval_isInt (combineForm comb) a
+                (fun t ht => ⟨(hIntCond rfl t ht).1, hint _ (hIntCond rfl t ht).2⟩)
+            have hr := rnd_sound (combineForm comb) (combine comb).rhs a hInt hlin
+            simpa [deriveRow] using hr
+      refine ihsub (deriveRow comb rnd :: rows) hvsub a hint ?_
+      intro c hc
+      rcases List.mem_cons.mp hc with rfl | hc
+      · exact hd
+      · exact hrows c hc
 
 /-! ## Step 2: a computable (`Bool`) checker
 
@@ -415,6 +455,10 @@ def checkRefTree (isInt : Nat → Bool) : List Le → RefTree → Bool
   | rows, .split i k lo hi =>
       isInt i && checkRefTree isInt (leLower i (k : ℚ) :: rows) lo &&
       checkRefTree isInt (leUpper i (k : ℚ) :: rows) hi
+  | rows, .derive comb rnd sub =>
+      comb.all (fun p => decide (0 ≤ p.1) && decide (p.2 ∈ rows)) &&
+      (!rnd || (combineForm comb).all (fun t => isIntValB t.coeff && isInt t.idx)) &&
+      checkRefTree isInt (deriveRow comb rnd :: rows) sub
 
 /-- `checkRefTree` implies `RefTree.Valid`. -/
 theorem checkRefTree_valid (isInt : Nat → Bool) :
@@ -434,6 +478,16 @@ theorem checkRefTree_valid (isInt : Nat → Bool) :
       simp only [checkRefTree, Bool.and_eq_true] at h
       obtain ⟨⟨hi_int, hlo⟩, hhi⟩ := h
       exact ⟨hi_int, ihlo _ hlo, ihhi _ hhi⟩
+  | derive comb rnd sub ihsub =>
+      intro h
+      simp only [checkRefTree, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq,
+        Bool.or_eq_true, Bool.not_eq_true'] at h
+      obtain ⟨⟨hall, hint⟩, hsub⟩ := h
+      refine ⟨fun p hp => (hall p hp).1, fun p hp => (hall p hp).2, ?_, ihsub _ hsub⟩
+      intro hrnd t ht
+      rcases hint with hf | hall2
+      · exact absurd hrnd (by rw [hf]; simp)
+      · exact ⟨isIntValB_sound (hall2 t ht).1, (hall2 t ht).2⟩
 
 /-- **The automatic checker is sound.**  If `checkRefTree` accepts, no valuation whose
 integer-constrained variables are integral satisfies `rows` — the MILP is infeasible. -/
