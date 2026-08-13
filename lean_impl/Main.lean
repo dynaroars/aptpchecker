@@ -70,7 +70,19 @@ def runScip (mpsPath certPath : String) : IO (Except String (String × String)) 
 /-- Check one leaf: encode → MPS → SCIP → parse → `checkSem`. -/
 def checkLeafIO (net : Network) (prob : Problem) (obj : Objective)
     (leaf : Array Int) (viprDir : String) (leafIdx : Nat) : IO Bool := do
-  let (rows, objRow, binIds) := encodeB net prob.box leaf.toList obj.c obj.rhs
+  -- Two encoders available: `encode` (hand-optimized: folds sign-fixed neurons, small
+  -- MILP that SCIP proves with cuts only) and `encodeVerified` (the dimension-indexed
+  -- `encRows` the soundness theorems are about; uniform big-M ⇒ SCIP branches and uses
+  -- VIPR v1.1 "weak" domination, which the checker does not yet handle). Default to the
+  -- working path; the verified path is selected with APTP_VERIFIED=1.
+  let useVerified := (← IO.getEnv "APTP_VERIFIED").isSome
+  let (rows, objRow, binIds) ←
+    if useVerified then
+      match encodeVerified net prob.box leaf.toList obj.c obj.rhs with
+      | some t => pure t
+      | none => IO.eprintln s!"  leaf {leafIdx}: not an MLP"; return false
+    else
+      pure (encodeB net prob.box leaf.toList obj.c obj.rhs)
   let numVars := (rows ++ [objRow]).foldl (fun mx r =>
       r.form.foldl (fun m t => max m (t.idx + 1)) mx) 0
   let mps := emitMPS rows objRow binIds numVars
