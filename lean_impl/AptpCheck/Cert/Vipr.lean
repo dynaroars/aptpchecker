@@ -272,4 +272,64 @@ theorem replay_infeasible_all (rows : List Le) (steps : List (List (ℚ × Le)))
   fun a hrows =>
     replay_infeasible rows steps hvalid final hnn hused a (hcancel a) hneg hrows
 
+/-! ## Branch-and-bound refutation trees: the automatic "proof by cases" checker
+
+A VIPR `RTP infeas` certificate is, in essence, a proof by cases: `lin` leaves
+refute LP branches, and `uns` splits combine the branches of an integer variable.
+We model that directly as a refutation *tree* — the tree structure carries the
+case-split ("assumption") bookkeeping, so a leaf's rows are exactly the branch bounds
+accumulated on the path to it. This is complete for MILP infeasibility using only
+`lin` (Farkas) leaves and integer `split`s; `rnd` cuts are an optimization layered on
+top later. -/
+
+/-- A branch-and-bound refutation: a direct Farkas combination refuting the current
+rows (`leaf`), or an integer split on variable `i` at `k` with refutations of both
+branches `x_i ≤ k` and `x_i ≥ k+1` (`split`). -/
+inductive RefTree where
+  | leaf (comb : List (ℚ × Le))
+  | split (i : Nat) (k : ℤ) (lo hi : RefTree)
+
+/-- Validity of a refutation tree against a row set and an integrality predicate.
+`leaf comb`: nonnegative multipliers on rows drawn from `rows`, whose combination
+cancels identically and has negative constant. `split i k lo hi`: `i` is
+integer-constrained and each branch refutes `rows` extended with its bound. -/
+def RefTree.Valid (isInt : Nat → Prop) : List Le → RefTree → Prop
+  | rows, .leaf comb =>
+      (∀ p ∈ comb, 0 ≤ p.1) ∧ (∀ p ∈ comb, p.2 ∈ rows) ∧
+      (∀ a, (comb.map (fun p => p.1 * p.2.form.eval a)).sum = 0) ∧
+      ((comb.map (fun p => p.1 * p.2.rhs)).sum < 0)
+  | rows, .split i k lo hi =>
+      isInt i ∧
+      RefTree.Valid isInt (leLower i (k : ℚ) :: rows) lo ∧
+      RefTree.Valid isInt (leUpper i (k : ℚ) :: rows) hi
+
+/-- **The proof-by-cases checker is sound.** A valid refutation tree witnesses that no
+valuation whose integer-constrained variables are integral can satisfy `rows` — i.e.
+the MILP is infeasible. Leaves are discharged by `farkas_le`, splits by the
+exhaustiveness of the integer split (`int_split`). -/
+theorem refTree_sound (isInt : Nat → Prop) :
+    ∀ (rows : List Le) (t : RefTree), RefTree.Valid isInt rows t →
+      ∀ a, (∀ j, isInt j → IsIntVal (a j)) → (∀ c ∈ rows, Le.sat c a) → False := by
+  intro rows t
+  induction t generalizing rows with
+  | leaf comb =>
+      intro hval a _ hrows
+      obtain ⟨hnn, hused, hcancel, hneg⟩ := hval
+      exact farkas_le comb a hnn (hcancel a) hneg (fun p hp => hrows p.2 (hused p hp))
+  | split i k lo hi ihlo ihhi =>
+      intro hval a hint hrows
+      obtain ⟨hIsInt, hvlo, hvhi⟩ := hval
+      obtain ⟨v, hv⟩ := hint i hIsInt
+      rcases int_split a i k v hv with hlo | hhi
+      · refine ihlo (leLower i (k : ℚ) :: rows) hvlo a hint ?_
+        intro c hc
+        rcases List.mem_cons.mp hc with rfl | hc
+        · exact (sat_leLower a i (k : ℚ)).mpr hlo
+        · exact hrows c hc
+      · refine ihhi (leUpper i (k : ℚ) :: rows) hvhi a hint ?_
+        intro c hc
+        rcases List.mem_cons.mp hc with rfl | hc
+        · exact (sat_leUpper a i (k : ℚ)).mpr hhi
+        · exact hrows c hc
+
 end AptpCheck.Cert
