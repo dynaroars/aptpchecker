@@ -46,9 +46,13 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > `Lin→ReLU→…→Lin` with the full big-M encoding, by induction on depth; axiom-clean;
 > one-hidden/affine cases retained). Stated on a dimension-indexed `MLP` normal form
 > ending in a linear layer; Conv/CNN out of scope. **VIPR replay
-> (Problem 2) step soundness is proved** (`Cert/Vipr`: `lin_sound`, `rnd_sound`,
-> `uns_sound`, a VIPR v1.0 parser `Ast/Vipr`, and a `lin`-only checked fold
-> `replay_infeasible_all`; axiom-clean). **The `.net` parser is FULLY verified**
+> (Problem 2) is complete** — a full automatic proof-by-cases certificate checker
+> (`Cert/Vipr`: `lin_sound`/`rnd_sound`/`uns_sound`; `RefTree` + `refTree_sound`; the
+> runnable `Bool` `checkRefTree` + `checkRefTree_sound`, verified running on an
+> integer-infeasible example; `Pipeline/ViprCheck.vipr_infeasible` composing it with
+> the VIPR v1.0 parser `Ast/Vipr`, demonstrated end-to-end on a hand-written `.vipr`).
+> The refutation tree is produced by an untrusted step and re-validated, so it stays
+> out of the TCB. All axiom-clean. **The `.net` parser is FULLY verified**
 > (`Ast/NetRoundtrip.parseNet_printNet : parseNet (printNet r) = .ok (rawToNet r)`,
 > axiom-clean) — this required de-`partial`-izing the layer loop: `Ast/Net.parseLayers`
 > is now total via `parseLayersFuel` (fuel `= toks.length+1`, behavior-preserving,
@@ -59,10 +63,10 @@ inside Lean, and comes with a **machine-checked soundness theorem**.
 > rewriting the two-pass `parseAptp` loops as total `List.foldl`s (behavior-preserving,
 > regression-checked on both sample proofs). So **both parsers are out of the trusted
 > base**. All modules are wired into the root and the full `lake build` passes (17139
-> jobs). **Pending**: (a) threading `rnd`/`uns` into the automatic fold +
-> assumption-set bookkeeping (Problem 2); (b) bridge the dimension-indexed `MLP`
-> soundness model to the executable `Array`-based `Model/Encoder`; (c) Conv/CNN
-> encoding (future); (d) executable CLI wiring (Problem 3).
+> jobs). **Pending**: (a) bridge the dimension-indexed `MLP` soundness model to the
+> executable `Array`-based `Model/Encoder`; (b) Conv/CNN encoding (future); (c) the
+> executable CLI wiring (Problem 3), including the untrusted flat-VIPR→`RefTree`
+> converter feeding `checkRefTree`.
 
 ---
 

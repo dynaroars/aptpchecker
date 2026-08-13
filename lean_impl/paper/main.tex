@@ -525,12 +525,25 @@ form ending in a linear scoring layer; \code{Flatten} is the identity and elided
 consecutive linears/ReLUs collapse, and \emph{Conv/CNN is out of scope}, left as future
 work.)
 
-\emph{Certificate replay} is mechanized at the step level: \code{lin\_sound} (a
-nonnegative combination of $\le$-rows is implied, generalizing
-Lemma~\ref{lem:farkas}), \code{rnd\_sound} (integer rounding of a bound under
-integrality), and \code{uns\_sound} (discharge of an integer split
-$x_i\le k \lor x_i\ge k{+}1$) are all proved axiom-clean, alongside a VIPR~v1.0 parser
-and a checked \code{lin}-only replay fold (\code{replay\_infeasible\_all}).
+\emph{Certificate replay} is mechanized as a complete, automatic, runnable
+proof-by-cases checker. The three step rules are proved axiom-clean---\code{lin\_sound}
+(a nonnegative combination of $\le$-rows is implied, generalizing
+Lemma~\ref{lem:farkas}), \code{rnd\_sound} (integer rounding under integrality), and
+\code{uns\_sound} (discharge of an integer split $x_i\le k \lor x_i\ge k{+}1$). On top,
+a refutation is modelled as a tree (\code{RefTree}: Farkas leaf, integer split, and a
+round/derive node), whose validity (\code{refTree\_sound}) proves no valuation with the
+declared variables integral satisfies the rows---i.e. the MILP is infeasible; the tree
+structure carries the case-split assumptions. A \code{Bool} checker
+\code{checkRefTree} (with computable identical-cancellation, \code{formIsZero}) is
+proved to imply that soundness (\code{checkRefTree\_sound}) and \emph{runs} (verified
+returning \code{true} on the integer-infeasible $2x\ge1\wedge 2x\le1$, which genuinely
+needs a case-split). This handles \code{lin}+\code{rnd}+\code{uns}, and \code{lin}+
+\code{uns} alone is already complete for MILP infeasibility. Finally
+\code{vipr\_infeasible} composes it with the VIPR~v1.0 parser: a tree validated against
+a parsed certificate's \code{CON} rows proves that system infeasible (demonstrated end
+to end on a hand-written \code{.vipr}). The tree is produced by an \emph{untrusted}
+step (SCIP's search / a flat-to-tree converter); \code{checkRefTree} re-validates it,
+so it stays out of the trusted base.
 
 \emph{Parser verification.} The `.net` reader is \textbf{fully verified}:
 \code{parseNet\_printNet} proves \code{parseNet (printNet r) = .ok (rawToNet r)} for
@@ -548,11 +561,10 @@ S-expression parser and rewriting the two-pass \code{parseAptp} loops as total
 \code{List.foldl}s (behaviour-preserving; regression-checked on both sample proofs).
 \textbf{Both} parsers are thus out of the trusted base.
 
-Remaining, and none requiring trust in \scip{} or floats: threading
-\code{rnd}/\code{uns} into the \emph{automatic} replay fold (they are proved as
-standalone lemmas) with assumption-set bookkeeping; bridging the dimension-indexed
-\code{MLP} soundness model to the executable \code{Array}-based encoder; Conv/CNN
-encoding; and the executable CLI wiring into Fig.~\ref{fig:thm}.
+Remaining, and none requiring trust in \scip{} or floats: bridging the
+dimension-indexed \code{MLP} soundness model to the executable \code{Array}-based
+encoder; Conv/CNN encoding; and the executable CLI wiring into Fig.~\ref{fig:thm}
+(including the untrusted flat-VIPR-to-tree converter).
 
 \paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
 arithmetic, and the \code{.net} file faithfully representing the intended network (its

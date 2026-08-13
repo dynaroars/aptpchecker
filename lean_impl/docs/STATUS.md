@@ -28,8 +28,11 @@ compiled code.
   fully-connected ReLU networks of any depth that end in a linear scoring layer
   (see caveats for exactly what "standard" covers). Getting this translation right
   is the central and hardest result.
-- **Re-checking the solver's certificate.** The individual steps of replaying an
-  external solver's proof in exact arithmetic are proven correct.
+- **Re-checking the solver's certificate — complete and automatic.** The full
+  proof-by-cases checker (all three step kinds: add, round, and case-split) is proven
+  correct and runs as a `Bool` function; it connects to the certificate-file parser,
+  so a validated refutation of a certificate's constraints proves them infeasible.
+  Verified running on a small example that genuinely needs a case-split.
 - **The end-to-end argument.** The top-level reasoning that combines coverage and
   per-piece refutation into the final guarantee is proven.
 - **Both input-file readers.** The parser for the exact-network file *and* the
@@ -57,12 +60,13 @@ original Python tool's output on the sample files.
   linear layers (or back-to-back ReLUs) are merged. **Convolutional networks
   (CNNs) are not covered yet** — that is planned future work.
 
-- **Solver certificate replay is not yet fully automatic.** Two of the three kinds
-  of certificate steps are proven correct on their own, but the automatic
-  end-to-end replay currently wires in only the first kind; folding in the other
-  two (and the related bookkeeping) is still pending.
-
 - **The command-line tool is not yet fully assembled** around the verified core.
+  (The solver-certificate checker itself is now complete and automatic: it handles
+  all three step kinds — add, round, and proof-by-cases — is proven correct, runs as
+  a `Bool` function, and connects to the certificate-file parser. What's left is only
+  gluing it, the network encoder, and the file readers into one runnable command,
+  plus the small *untrusted* step that turns the solver's proof file into the tree
+  the checker validates.)
 
 Nothing outstanding requires trusting the external solver or any floating-point
 arithmetic — those stay outside the trusted core by design.
