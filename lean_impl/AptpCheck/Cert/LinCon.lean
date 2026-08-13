@@ -24,7 +24,7 @@ abbrev Valuation := Nat → ℚ
 structure Term where
   idx : Nat
   coeff : ℚ
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, DecidableEq
 
 /-- A sparse linear form `Σ coeff · x[idx]`. -/
 abbrev LinForm := List Term
@@ -36,7 +36,7 @@ def LinForm.eval (f : LinForm) (a : Valuation) : ℚ :=
 structure Le where
   form : LinForm
   rhs : ℚ
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, DecidableEq
 
 def Le.sat (c : Le) (a : Valuation) : Prop := c.form.eval a ≤ c.rhs
 

@@ -332,4 +332,114 @@ theorem refTree_sound (isInt : Nat → Prop) :
         · exact (sat_leUpper a i (k : ℚ)).mpr hhi
         · exact hrows c hc
 
+/-! ## Step 2: a computable (`Bool`) checker
+
+The one non-decidable part of `RefTree.Valid` is a leaf's *identical cancellation*
+`∀ a, (Σ yᵢ · cᵢ.form)(a) = 0`. We make it computable: normalize the combined form to
+per-index coefficient sums (`normForm`) and check they all vanish (`formIsZero`),
+proving that this implies the form is identically zero. Everything else is decidable,
+giving a `Bool` checker `checkRefTree` that runs on a certificate. -/
+
+/-- Value of a per-index coefficient association list at `a`. -/
+def evalAL (al : List (Nat × ℚ)) (a : Valuation) : ℚ := (al.map (fun p => p.2 * a p.1)).sum
+
+@[simp] theorem evalAL_nil (a : Valuation) : evalAL [] a = 0 := rfl
+@[simp] theorem evalAL_cons (p : Nat × ℚ) (tl : List (Nat × ℚ)) (a : Valuation) :
+    evalAL (p :: tl) a = p.2 * a p.1 + evalAL tl a := by simp [evalAL]
+
+/-- Accumulate `(i, c)` into a per-index coefficient association list. -/
+def addTerm : List (Nat × ℚ) → Nat → ℚ → List (Nat × ℚ)
+  | [], i, c => [(i, c)]
+  | (j, d) :: rest, i, c => if i == j then (j, d + c) :: rest else (j, d) :: addTerm rest i c
+
+theorem addTerm_eval (al : List (Nat × ℚ)) (i : Nat) (c : ℚ) (a : Valuation) :
+    evalAL (addTerm al i c) a = evalAL al a + c * a i := by
+  induction al with
+  | nil => simp [addTerm]
+  | cons hd tl ih =>
+      obtain ⟨j, d⟩ := hd
+      by_cases heq : i = j
+      · subst heq
+        simp only [addTerm, beq_self_eq_true, if_true, evalAL_cons]; ring
+      · have hcond : ¬ ((i == j) = true) := by rw [beq_iff_eq]; exact heq
+        simp only [addTerm, if_neg hcond, evalAL_cons, ih]; ring
+
+/-- Normalize a linear form to per-index coefficient sums. -/
+def normForm (f : LinForm) : List (Nat × ℚ) :=
+  f.foldl (fun acc t => addTerm acc t.idx t.coeff) []
+
+theorem normForm_foldl_eval (f : LinForm) (al : List (Nat × ℚ)) (a : Valuation) :
+    evalAL (f.foldl (fun acc t => addTerm acc t.idx t.coeff) al) a
+      = evalAL al a + f.eval a := by
+  induction f generalizing al with
+  | nil => simp [LinForm.eval]
+  | cons t ts ih =>
+      simp only [List.foldl_cons]
+      rw [ih (addTerm al t.idx t.coeff), addTerm_eval]
+      have : LinForm.eval (t :: ts) a = t.coeff * a t.idx + LinForm.eval ts a := by
+        simp [LinForm.eval]
+      rw [this]; ring
+
+theorem normForm_eval (f : LinForm) (a : Valuation) : evalAL (normForm f) a = f.eval a := by
+  have h := normForm_foldl_eval f [] a
+  simpa [normForm] using h
+
+theorem evalAL_zero_of_all (al : List (Nat × ℚ)) (a : Valuation)
+    (h : ∀ p ∈ al, p.2 = 0) : evalAL al a = 0 := by
+  induction al with
+  | nil => simp
+  | cons p tl ih =>
+      simp only [evalAL_cons, h p (by simp), ih (fun q hq => h q (by simp [hq]))]
+      simp
+
+/-- A linear form is identically zero if all its normalized coefficients vanish. -/
+def formIsZero (f : LinForm) : Bool := (normForm f).all (fun p => p.2 == 0)
+
+theorem formIsZero_sound (f : LinForm) (h : formIsZero f = true) (a : Valuation) :
+    f.eval a = 0 := by
+  rw [← normForm_eval]
+  refine evalAL_zero_of_all _ a (fun p hp => ?_)
+  have := (List.all_eq_true.mp h) p hp
+  exact eq_of_beq this
+
+/-- Leaf check: nonnegative multipliers on rows drawn from `rows`, combination cancels
+identically (`formIsZero`), and negative constant. -/
+def checkLeaf (rows : List Le) (comb : List (ℚ × Le)) : Bool :=
+  comb.all (fun p => decide (0 ≤ p.1) && decide (p.2 ∈ rows)) &&
+  formIsZero (combineForm comb) &&
+  decide ((combine comb).rhs < 0)
+
+/-- The automatic refutation-tree checker (`Bool`). -/
+def checkRefTree (isInt : Nat → Bool) : List Le → RefTree → Bool
+  | rows, .leaf comb => checkLeaf rows comb
+  | rows, .split i k lo hi =>
+      isInt i && checkRefTree isInt (leLower i (k : ℚ) :: rows) lo &&
+      checkRefTree isInt (leUpper i (k : ℚ) :: rows) hi
+
+/-- `checkRefTree` implies `RefTree.Valid`. -/
+theorem checkRefTree_valid (isInt : Nat → Bool) :
+    ∀ (rows : List Le) (t : RefTree), checkRefTree isInt rows t = true →
+      RefTree.Valid (fun i => isInt i = true) rows t := by
+  intro rows t
+  induction t generalizing rows with
+  | leaf comb =>
+      intro h
+      simp only [checkRefTree, checkLeaf, Bool.and_eq_true, List.all_eq_true,
+        decide_eq_true_eq] at h
+      obtain ⟨⟨hall, hz⟩, hneg⟩ := h
+      exact ⟨fun p hp => (hall p hp).1, fun p hp => (hall p hp).2,
+             fun a => by rw [← eval_combineForm]; exact formIsZero_sound _ hz a, hneg⟩
+  | split i k lo hi ihlo ihhi =>
+      intro h
+      simp only [checkRefTree, Bool.and_eq_true] at h
+      obtain ⟨⟨hi_int, hlo⟩, hhi⟩ := h
+      exact ⟨hi_int, ihlo _ hlo, ihhi _ hhi⟩
+
+/-- **The automatic checker is sound.**  If `checkRefTree` accepts, no valuation whose
+integer-constrained variables are integral satisfies `rows` — the MILP is infeasible. -/
+theorem checkRefTree_sound (isInt : Nat → Bool) (rows : List Le) (t : RefTree)
+    (h : checkRefTree isInt rows t = true) :
+    ∀ a, (∀ j, isInt j = true → IsIntVal (a j)) → (∀ c ∈ rows, Le.sat c a) → False :=
+  refTree_sound (fun i => isInt i = true) rows t (checkRefTree_valid isInt rows t h)
+
 end AptpCheck.Cert
