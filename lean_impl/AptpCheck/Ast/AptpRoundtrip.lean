@@ -28,13 +28,22 @@ Main results (all axiom-clean: `propext`, `Classical.choice`, `Quot.sound`):
 * `parseVarName_print`, `asBoxUpdate_print`, `asObjective_print_YY`/`_Yub` — the
                              per-statement analyser functions round-trip against a
                              canonical printer for `declare`/box/output constraints.
+* `stmtChars_cleanBal`     — the printed form of a well-formed statement is a
+                             newline-free, comment/trim-invariant, balanced
+                             (`(` = `)`) nonempty line — the shape the statement
+                             reader expects.
+* `decls_pass` / `asserts_pass` / `box_pass` — folding each of `parseAptp`'s scan
+                             passes over the full printed statement list recovers,
+                             respectively, `(numInputs, numOutputs, neurons)`, the
+                             box lower/upper arrays + objective rows + DNF leaves,
+                             and the finalized `(lo,hi)` box.
+* `parseAptp_printAptp`    — **top-level round-trip**: for a well-formed
+                             `RawProblem`, `parseAptp (printAptp raw) = .ok (decode raw)`.
 
-Not yet assembled: the two `Id.run do` `for`-loop passes of `parseAptp` (which
-merge box bounds via min/max and collect the DNF leaves), the `mkLeaf` clause loop
-(also a `for`-loop with early returns), and the multi-line `readStatements`
-reader. Completing the end-to-end `parseAptp (printAptp p) = .ok (decode p)`
-requires characterizing those `forIn` loops as folds; the per-construct lemmas
-above are the reusable pieces for that assembly.
+The scan passes of `parseAptp` are now total `List.foldl`s over `Except`
+accumulators (see `Ast/Aptp.lean`); this module characterizes each fold and
+composes them (via `readStatementsFold_multi` and `parseStatement_stmtChars`)
+into the end-to-end certification.
 -/
 
 namespace AptpCheck.Ast.AptpRoundtrip
