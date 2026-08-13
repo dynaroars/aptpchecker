@@ -13,6 +13,7 @@ import AptpCheck.Model.Network
 import AptpCheck.Model.Encoding
 import AptpCheck.Model.Encoder
 import AptpCheck.Model.EncodingSound
+import AptpCheck.Model.NetworkMLP
 import AptpCheck.Cert.Vipr
 import AptpCheck.Ast.Vipr
 import AptpCheck.Ast.NetRoundtrip
