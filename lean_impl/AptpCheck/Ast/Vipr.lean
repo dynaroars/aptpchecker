@@ -238,8 +238,14 @@ def takeDer (ts : Toks) : Except String (ViprDer × Toks) := do
   let ((form, usesObj), ts4) ← takeBody ts3
   let (reason, ts5) ← takeReason ts4
   let (idx, ts6) ← takeInt ts5
+  -- SCIP marks some derivations as globally/locally valid with a trailing keyword;
+  -- consume it if present (it carries no information the checker needs).
+  let ts7 := match ts6 with
+    | "global" :: rest => rest
+    | "local"  :: rest => rest
+    | _ => ts6
   Except.ok ({ name := name, sense := sense, rhs := rhs, form := form,
-               usesObj := usesObj, reason := reason, idx := idx }, ts6)
+               usesObj := usesObj, reason := reason, idx := idx }, ts7)
 
 def takeDers : Nat → Toks → Except String (List ViprDer × Toks)
   | 0,     ts => Except.ok ([], ts)
