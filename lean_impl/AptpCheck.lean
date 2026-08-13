@@ -17,3 +17,4 @@ import AptpCheck.Cert.Vipr
 import AptpCheck.Ast.Vipr
 import AptpCheck.Ast.NetRoundtrip
 import AptpCheck.Ast.AptpRoundtrip
+import AptpCheck.Pipeline.ViprCheck
