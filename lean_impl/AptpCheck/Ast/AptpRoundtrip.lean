@@ -1363,4 +1363,84 @@ theorem stmtChars_cleanBal (e : Sexp) (hwf : WF e) : CleanBalLine (stmtChars e) 
     _ = rtrim (stmtChars e) := by rw [hbs]
     _ = stmtChars e := hrt
 
+/-! ## Scan-pass folds over the printed statement list
+
+The two scan passes of `parseAptp` fold over *all* printed statements. On each
+pass, statements of the "wrong" kind are no-ops (`scanDeclsStep` skips asserts;
+`scanAssertsStep` skips declares), so the passes decompose along the statement
+segments via `List.foldl_append`. -/
+
+/-- Folding the max over `range n` from `-1` gives `n - 1` (as an `Int`). -/
+lemma foldl_max_range (n : Nat) :
+    (List.range n).foldl (fun (m : Int) i => max m (Int.ofNat i)) (-1) = (n : Int) - 1 := by
+  induction n with
+  | zero => simp
+  | succ n ih =>
+    rw [List.range_succ, List.foldl_append, ih, List.foldl_cons, List.foldl_nil]
+    have hn : (Int.ofNat n : Int) = (n : Int) := rfl
+    rw [hn, max_eq_right (by omega)]
+    push_cast; omega
+
+/-- Declares pass over the printed `X_i` declarations: accumulates `max`. -/
+lemma xDecls_fold (is : List Nat) (mo : Int) (ns : Array Nat) :
+    ∀ (start : Int),
+      (is.map xDeclSexp).foldl scanDeclsStep (.ok (start, mo, ns))
+        = .ok (is.foldl (fun (m : Int) i => max m (Int.ofNat i)) start, mo, ns) := by
+  induction is with
+  | nil => intro start; simp
+  | cons i is ih =>
+    intro start
+    rw [List.map_cons, List.foldl_cons, scanDeclsStep_x (start, mo, ns) i]
+    exact ih (max start (Int.ofNat i))
+
+/-- Declares pass over the printed `Y_j` declarations: accumulates `max`. -/
+lemma yDecls_fold (is : List Nat) (mi : Int) (ns : Array Nat) :
+    ∀ (start : Int),
+      (is.map yDeclSexp).foldl scanDeclsStep (.ok (mi, start, ns))
+        = .ok (mi, is.foldl (fun (m : Int) i => max m (Int.ofNat i)) start, ns) := by
+  induction is with
+  | nil => intro start; simp
+  | cons i is ih =>
+    intro start
+    rw [List.map_cons, List.foldl_cons, scanDeclsStep_y (mi, start, ns) i]
+    exact ih (max start (Int.ofNat i))
+
+/-- The asserts pass skips `X_i` declarations. -/
+lemma scanAsserts_xdeclFold (numOut : Nat) (is : List Nat) :
+    ∀ (acc : AssertState), (is.map xDeclSexp).foldl (scanAssertsStep numOut) (.ok acc) = .ok acc := by
+  induction is with
+  | nil => intro acc; simp
+  | cons i is ih =>
+    intro acc
+    rw [List.map_cons, List.foldl_cons, scanAssertsStep_xdecl numOut acc i]
+    exact ih acc
+
+/-- The asserts pass skips `Y_j` declarations. -/
+lemma scanAsserts_ydeclFold (numOut : Nat) (is : List Nat) :
+    ∀ (acc : AssertState), (is.map yDeclSexp).foldl (scanAssertsStep numOut) (.ok acc) = .ok acc := by
+  induction is with
+  | nil => intro acc; simp
+  | cons i is ih =>
+    intro acc
+    rw [List.map_cons, List.foldl_cons, scanAssertsStep_ydecl numOut acc i]
+    exact ih acc
+
+/-- The asserts pass skips `N_k` declarations. -/
+lemma scanAsserts_ndeclFold (numOut : Nat) (ks : List Nat) :
+    ∀ (acc : AssertState), (ks.map nDeclSexp).foldl (scanAssertsStep numOut) (.ok acc) = .ok acc := by
+  induction ks with
+  | nil => intro acc; simp
+  | cons k ks ih =>
+    intro acc
+    rw [List.map_cons, List.foldl_cons, scanAssertsStep_ndecl numOut acc k]
+    exact ih acc
+
+lemma replicate_none_size (n : Nat) : ((List.replicate n (none : Option ℚ)).toArray).size = n := by
+  simp
+
+lemma replicate_none_get! (n i : Nat) (h : i < n) :
+    (List.replicate n (none : Option ℚ)).toArray[i]! = none := by
+  rw [Array.getElem!_eq_getD]
+  simp [Array.getD, h]
+
 end AptpCheck.Ast.AptpRoundtrip
