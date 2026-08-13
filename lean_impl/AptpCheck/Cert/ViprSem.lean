@@ -154,16 +154,35 @@ theorem rnd_ge (form : LinForm) (β : ℚ) (a : Valuation)
   rw [hn] at hsat ⊢
   exact_mod_cast Int.ceil_le.mpr hsat
 
-/-- **`lin` step check.** -/
+/-- The combination is itself an absurdity (identically-zero form, rhs contradicting a
+valid sense) — which, per the VIPR spec, dominates *any* stated constraint. -/
+def linAbsurd (cs : List (ℚ × SLe)) : Bool :=
+  (suitLeB cs && formIsZero (scomb cs).form && decide ((scomb cs).rhs < 0)) ||
+  (suitGeB cs && formIsZero (scomb cs).form && decide (0 < (scomb cs).rhs))
+
+theorem linAbsurd_false {cs} (h : linAbsurd cs = true) {a : Valuation}
+    (hsat : ∀ p ∈ cs, p.2.sat a) : False := by
+  simp only [linAbsurd, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+  rcases h with ⟨⟨hs, hz⟩, hr⟩ | ⟨⟨hs, hz⟩, hr⟩
+  · have hle := scomb_le_sat cs a (suitLeB_sound hs) hsat
+    rw [formIsZero_sound _ hz a] at hle; linarith
+  · have hge := scomb_ge_sat cs a (suitGeB_sound hs) hsat
+    rw [formIsZero_sound _ hz a] at hge; linarith
+
+/-- **`lin` step check.** Accepts either normal rhs-domination or an absurd combination. -/
 def linCheck (stated : SLe) (cs : List (ℚ × SLe)) : Bool :=
-  formEq (scomb cs).form stated.form &&
-  (if stated.sense = 'L' then suitLeB cs && decide ((scomb cs).rhs ≤ stated.rhs)
-   else if stated.sense = 'G' then suitGeB cs && decide (stated.rhs ≤ (scomb cs).rhs)
-   else false)
+  linAbsurd cs ||
+  (formEq (scomb cs).form stated.form &&
+   (if stated.sense = 'L' then suitLeB cs && decide ((scomb cs).rhs ≤ stated.rhs)
+    else if stated.sense = 'G' then suitGeB cs && decide (stated.rhs ≤ (scomb cs).rhs)
+    else false))
 
 theorem linCheck_sound {stated cs} (h : linCheck stated cs = true) {a : Valuation}
     (hsat : ∀ p ∈ cs, p.2.sat a) : stated.sat a := by
-  simp only [linCheck, Bool.and_eq_true] at h
+  simp only [linCheck, Bool.or_eq_true] at h
+  rcases h with ha | h
+  · exact (linAbsurd_false ha hsat).elim
+  rw [Bool.and_eq_true] at h
   obtain ⟨hform, hrest⟩ := h
   have hfe := formEq_sound hform a
   simp only [SLe.sat]

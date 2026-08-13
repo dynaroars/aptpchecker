@@ -27,6 +27,7 @@ structure Enc where
   hi : Array ℚ          -- current exact upper bounds
   neuron : Nat          -- global ReLU-neuron counter (0-based, layer-major)
   rows : Array Le
+  bins : Array Nat      -- variable ids that are ReLU binaries (must be integer in the MILP)
   deriving Inhabited
 
 /-- Allocate input variables `0..n-1` and emit the box rows. -/
@@ -37,6 +38,7 @@ def initEnc (box : Array (ℚ × ℚ)) : Enc :=
     lo := box.map (·.1)
     hi := box.map (·.2)
     neuron := 0
+    bins := #[]
     rows := (Array.range n).foldl (fun rs j =>
               (rs.push ⟨[⟨j, 1⟩], (box[j]!).2⟩).push ⟨[⟨j, -1⟩], -(box[j]!).1⟩) #[] }
 
@@ -82,6 +84,7 @@ def encRelu (e : Enc) (leaf : List Int) : Enc := Id.run do
   let mut nhi : Array ℚ := #[]
   let mut next := e.next
   let mut ncount := e.neuron
+  let mut bins := e.bins
   for k in [0:e.ids.size] do
     let preId := e.ids[k]!
     let lo := e.lo[k]!
@@ -105,9 +108,10 @@ def encRelu (e : Enc) (leaf : List Int) : Enc := Id.run do
       let bid := next + 1
       next := next + 2
       nids := nids.push vid
+      bins := bins.push bid
       for r in reluRows lo hi preId vid bid do rows := rows.push r
       nlo := nlo.push 0; nhi := nhi.push hi
-  return { e with next := next, ids := nids, lo := nlo, hi := nhi, neuron := ncount, rows := rows }
+  return { e with next := next, ids := nids, lo := nlo, hi := nhi, neuron := ncount, rows := rows, bins := bins }
 
 /-- Full encoding: the constraint rows and the objective row `Σ_k c_k · out_k ≤ rhs`
 (its negation is what the certificate refutes). -/
@@ -120,5 +124,17 @@ def encode (net : Network) (box : Array (ℚ × ℚ)) (leaf : List Int)
       | .flatten => e) (initEnc box)
   let objForm : LinForm := (List.range e.ids.size).map (fun k => ⟨e.ids.getD k 0, c.getD k 0⟩)
   (e.rows.toList, ⟨objForm, rhs⟩)
+
+/-- Like `encode`, but also returns the variable ids that are ReLU binaries (only these
+may be declared integer in the MILP handed to the solver — for soundness). -/
+def encodeB (net : Network) (box : Array (ℚ × ℚ)) (leaf : List Int)
+    (c : Array ℚ) (rhs : ℚ) : List Le × Le × List Nat :=
+  let e := net.layers.foldl (fun e ly =>
+      match ly with
+      | .linear l => encLinear e l
+      | .relu => encRelu e leaf
+      | .flatten => e) (initEnc box)
+  let objForm : LinForm := (List.range e.ids.size).map (fun k => ⟨e.ids.getD k 0, c.getD k 0⟩)
+  (e.rows.toList, ⟨objForm, rhs⟩, e.bins.toList)
 
 end AptpCheck.Model
