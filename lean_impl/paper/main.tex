@@ -282,63 +282,62 @@ $p^{(1)}$ and $N_3,N_4$ of $p^{(2)}$.
 goal is $\forall x\in\dom.\ y_0-y_1>0$ (i.e.\ $Y_0>Y_1$). Our parser returns exactly
 this ($\dom$, $c$, $\rho$) and the leaves below.
 
-\paragraph{Step 1 --- exact weight decoding (\code{float32ToRat}).} The \code{.net}
-file stores each weight as its raw 32-bit pattern (\emph{no} decimal re-parse), e.g.\
-$0.2$ as $\mathtt{0x3E4CCCCD}$. \code{float32ToRat} splits sign/exponent/mantissa and
-returns the exact dyadic $(-1)^s(2^{23}+m)2^{e-150}$; for $0.2$ this is
-$13421773/67108864$. \emph{Proof obligation:} none beyond definition---the decode is
-exact by construction, so the \lean{} network's weights are \emph{bit-identical} to the
-verifier's (\code{\#eval} sanity: $\mathtt{0x3F800000}\!\mapsto\!1$,
-$\mathtt{0xC0000000}\!\mapsto\!-2$, $\mathtt{0x3F000000}\!\mapsto\!1/2$). This is why
-the whole checker can be exact.
+\paragraph{Step 1 --- exact weight decoding (\code{float32ToRat}).}
+Every weight in the \code{.net} file is stored as its raw 32-bit hex pattern (e.g.\
+$0.2 \to \mathtt{0x3E4CCCCD}$). Our decoder extracts sign, exponent, and significand
+directly from the bits and returns the exact fraction --- $13421773/67108864$ for
+$0.2$. No decimal approximation is involved, so the checker's internal representation
+is \emph{exactly} the number the original network file encodes. This is why the whole
+pipeline can be exact: we never start from a rounded value.
+
+\emph{What we proved.} The decode is exact by definition (it is a closed formula over
+the bit-fields). We validate it by computing: $\mathtt{0x3F800000}\mapsto1$,
+$\mathtt{0xC0000000}\mapsto-2$, etc.\ --- matching the IEEE-754 spec.
 
 \paragraph{Step 2 --- verified parsing (\code{parseNet}, \code{parseAptp}).}
-\code{parseNet} reads the \code{.net} file to a \code{Network}; \code{parseAptp} reads
-the \code{.aptp} file to the \code{Problem} above. \emph{Both are proved faithful} by
-round-trip: \code{parseNet\_printNet}: \code{parseNet (printNet r) = .ok (rawToNet r)},
-and \code{parseAptp\_printAptp} likewise. \emph{Proof method:} the imperative loops are
-first made total (a \code{partial def} layer parser becomes a fuel-structural
-recursion; two \code{Id.run do} passes become \code{List.foldl}s), which is
-behaviour-preserving (regression-checked to give byte-identical results on the
-samples); then each stage---the tokenizer, the statement reader, the hex/decimal
-number decode, and every per-construct analyser (\code{declare}, box, output row,
-DNF clause)---is proved to invert a matching printer, and these compose by induction
-over the statement list. On the sample this yields $\dom=[-2,2]\times[-1,1]$,
-$c=(1,-1)$, $\rho=0$, neurons $\{1,2,3,4\}$, leaves
-$\{[-4],[-2,4],[2,1,4],[2,-1,4]\}$. Both parsers are therefore out of the trusted base.
+Two parsers read the network file and the proof-tree file. We proved that each parser
+is ``faithful'': if you take a valid in-memory representation and print it back to
+text, re-parsing that text gives back the \emph{same} object. Formally:
+\code{parseNet(printNet(r)) = Ok(rawToNet(r))}, and likewise for \code{parseAptp}.
 
-\paragraph{Step 3 --- exact evaluation and the \code{Network}$\to$\code{MLP} bridge.}
-\code{Network.eval} folds the \code{Array}-based layers to compute $\net(x)$ exactly
-(validated bit-for-bit against an independent \code{Fraction} forward pass, e.g.\
-$\net(1,1)=(-25991905743211293818487/75557863725914323419136,\dots)$). \code{toMLP}
-converts the parsed network to the dimension-indexed \code{MLP} normal form
-$\mathrm{cons}\,W_0 b_0(\mathrm{cons}\,W_2 b_2(\mathrm{last}\,W_4 b_4))$; on the sample
-\code{\#eval toMLP} returns \code{some} with \code{inDim}$=$\code{outD}$=2$.
-\code{toMLP\_eval} proves \code{Network.eval} agrees with \code{MLP.eval}. \emph{Proof:}
-a per-layer agreement lemma (executable \code{Linear.apply} $\leftrightarrow$
-\code{preAct}; $\relu\!\circ\!\mathrm{Linear}\leftrightarrow$ \code{postAct}, bridging
-\code{Array.foldl} vs.\ \code{Finset}-sums), then induction over the layer list. This
-is what lets the soundness theorem (stated on \code{MLP}) apply to the \emph{parsed,
-runnable} network.
+\emph{Why this matters.} It means the parsers cannot silently eat or corrupt data. If
+the file is well-formed, the parser reconstructs exactly what the file represents. We
+proved this by showing each sub-parser (numbers, token lists, variable declarations,
+box bounds, each leaf) inverts its matching printer, then composed them.
 
-\paragraph{Step 4 --- neuron stability (interval bounds).} Propagating $\dom$ with the
-exact interval rule
-$\underline v=W^{+}\underline u+W^{-}\overline u+b$,
-$\overline v=W^{+}\overline u+W^{-}\underline u+b$ gives
+On the sample, parsing produces $\dom=[-2,2]\times[-1,1]$, $c=(1,-1)$, $\rho=0$,
+neurons $\{1,2,3,4\}$, leaves $\{[-4],[-2,4],[2,1,4],[2,-1,4]\}$.
+
+\paragraph{Step 3 --- running the network exactly, and bridging to the proof model.}
+The parsed network runs as ordinary code: multiply arrays, add biases, apply ReLU. We
+also have a mathematical model (inductive \code{MLP}) on which the soundness theorems
+are stated. \code{toMLP\_eval} proves the two \emph{compute the same outputs} for all
+inputs.
+
+\emph{Why.} The soundness theorems say ``the encoding matches the MLP.'' The bridge
+says ``the MLP matches the parsed network.'' Chaining them: soundness applies to the
+actual parsed network, not just a separate mathematical copy.
+
+On the sample, \code{toMLP} succeeds (the network is a valid MLP with $\text{inDim}=
+\text{outD}=2$) and exact evaluation gives e.g.\ $\net(1,1)_0 =
+-25991905743211293818487/75557863725914323419136$.
+
+\paragraph{Step 4 --- bounding each neuron's range (interval analysis).}
+For each neuron, we compute the widest output it can produce given the input box. The
+rule: ``positive weights times the low end + negative weights times the high end =
+lower bound'' (and vice versa for the upper bound). On the sample:
 \[
 N_1\!\in\![-1.7,0.7],\quad N_2\!\in\![-0.5,1.1],\quad
 N_3\!\in\![-0.43,0.86],\quad N_4\!\in\![-0.1,1.31].
 \]
-\emph{All four neurons are unstable.} \emph{Proof (\code{affine\_interval\_sound}):}
-split each weight $w$ into $w^{+}=\max(w,0)\ge0$ and $w^{-}=\min(w,0)\le0$; then for
-$x$ in the box, $w^{+}\underline u\le w^{+}x\le w^{+}\overline u$ (multiply the box
-bound by a nonnegative scalar) and $w^{-}\overline u\le w^{-}x\le w^{-}\underline u$
-(nonpositive scalar flips), so each term is sandwiched; summing with
-\code{Finset.sum\_le\_sum} and using $w^{+}+w^{-}=w$ (\code{max\_add\_min}) gives the
-two bounds. A neuron with $\underline v\ge0$ (resp.\ $\overline v\le0$) would be folded
-to the identity (resp.\ constant $0$) by \code{stable\_active}/\code{stable\_inactive};
-here none is stable, so all four keep big-$M$ gadgets, and these bounds supply their
-big-$M$ constants (any tighter sound bound only helps).
+All four neurons can be either positive or negative (``unstable''), so none can be
+simplified away.
+
+\emph{What we proved (\code{affine\_interval\_sound}).} For any input $x$ inside the
+box, the neuron's true value is between the computed bounds. The argument: each term
+$w\cdot x_i$ is sandwiched between $w\cdot\mathrm{lo}_i$ and $w\cdot\mathrm{hi}_i$
+(positive coefficient: multiply by the lower bound gives the lower bound; negative:
+it flips); summing all the terms preserves the sandwich.
 
 \paragraph{The proof tree.} \code{sample.aptp} asserts a four-leaf DNF; our parser
 yields $\leaves=\{[-4],\,[-2,4],\,[2,1,4],\,[2,-1,4]\}$ over the signs of
@@ -350,79 +349,94 @@ $N_1,N_2,N_4$:
 The proof never branches on $N_3$, which therefore stays a free binary neuron inside
 every leaf's MILP---a concrete reason the leaves are MILPs, not LPs.
 
-\paragraph{Step 6 --- coverage (\code{checkCoverage}/\code{coverage\_sound}).} At any
-$x$ each pre-activation is $\ge 0$ or $<0$, so $(N_1,N_2,N_4)\in\{0,1\}^3$ is
-\emph{some} assignment; we need the DNF to be a tautology over that cube. Case split:
-$N_4{=}0\Rightarrow\leaf_1$; else $N_4{=}1$ and $N_2{=}0\Rightarrow\leaf_2$; else
-$N_2{=}1$ with $N_1{=}1\Rightarrow\leaf_3$, $N_1{=}0\Rightarrow\leaf_4$. All eight
-assignments are covered. \code{checkCoverage} decides this by enumerating the cube of
-the mentioned neurons (\code{assignmentsOn} over the deduplicated neuron list) and
-checking each is satisfied by some leaf. \emph{Proof (\code{coverage\_sound}):} given
-any $\sigma:\N\to\code{Bool}$, \code{assignmentsOn} contains an enumerated assignment
-agreeing with $\sigma$ on the mentioned neurons (completeness by induction using
-\code{Function.update}, needing \code{Nodup} from \code{dedup}); since \code{satLeaf}
-reads $\sigma$ only at a leaf's own neurons, if the check passed then $\sigma$ too
-satisfies some leaf. So the leaves tile $\dom$ (Lemma~\ref{lem:cover}). $N_3$ is
-irrelevant: it is not mentioned, and both its signs lie inside each region. This is a
-sound over-approximation---a tautology over the free cube is sufficient (every real
-sign vector is some cube point) though not necessary.
+\paragraph{Step 6 --- coverage: the leaves cover everything.}
+At any input $x$, each neuron is either ``on'' ($\ge0$) or ``off'' ($<0$). The
+branched neurons here are $(N_1,N_2,N_4)$, giving $2^3=8$ possible combinations. The
+four leaves together must cover all eight. We enumerate them: $N_4$ off
+$\Rightarrow\leaf_1$; $N_4$ on, $N_2$ off $\Rightarrow\leaf_2$; $N_4$ on, $N_2$ on,
+$N_1$ on $\Rightarrow\leaf_3$; $N_4$ on, $N_2$ on, $N_1$ off $\Rightarrow\leaf_4$.
+Every combination is accounted for.
 
-\paragraph{Step 7 --- encoding a leaf and its soundness (\code{encoding\_overapprox\_mlp}).}
-Take leaf $\leaf_3=[2,1,4]$ ($N_2,N_1,N_4$ active, $N_3$ unbranched). The encoder emits
-23 rows plus the objective, over variables $v_0,v_1$ (inputs), $v_2,v_3$ (pre-acts of
-$N_1,N_2$), $v_4,v_5$ (pre-acts of $N_3,N_4$), $v_6$ (post-act of $N_3$) with binary
-$v_7$, and $v_8,v_9$ (outputs): the box ($v_0\le2$, $-v_0\le2$, $v_1\le1$, $-v_1\le1$);
-per-layer affine equalities, each as two $\le$-rows, e.g.\ $v_2=-0.5v_0+0.2v_1-0.5$ and
-$v_4=-0.9v_2+0.6v_3+0.2$ (an active neuron passes its pre-var through, so
-$\mathrm{post}(N_1)=v_2$, etc.); the four big-$M$ rows for the unbranched $N_3$
-($v_6\le v_4-\underline u(1-v_7)$, $v_4\le v_6$, $v_6\le\overline u\,v_7$, $0\le v_6$,
-with $[\underline u,\overline u]=[-0.43,0.86]$ from Step~4); the leaf's sign rows
-$-v_2\le0$, $-v_3\le0$, $-v_5\le0$ ($N_1,N_2,N_4\ge0$); and the objective row
-$v_8-v_9\le\rho$. \emph{Soundness (\code{encoding\_overapprox\_mlp}):} the real
-trace---$v_0,v_1=x$, each $v$ its true pre/post value,
-$v_7=[\,\mathrm{pre}(N_3)\ge0\,]$---satisfies every row and evaluates the objective form
-to $c\cdot\net(x)$. By induction over the \code{MLP} layers, each row-type is
-discharged by its lemma: box by \code{boxRows\_sat}; affine equalities by
-\code{affEqRows\_sat} (they hold definitionally from \code{preAct}); the big-$M$ rows by
-\code{reluRows\_sat} (\code{reluBigM\_sound}: with $v_6=\max(\mathrm{pre},0)$,
-$v_7=[\mathrm{pre}\ge0]$, and the Step-4 bounds $\underline u\le\mathrm{pre}\le\overline
-u$, all four inequalities hold---a two-case check on the sign of $\mathrm{pre}$); the
-sign rows by \code{leafRows\_sat} (they hold because $x\in\reg(\leaf)$); the objective
-by \code{fuse\_linear} ($c\cdot(Wx{+}b)=(\sum_i c_iW_{i\cdot})x+\sum_i c_ib_i$). The
-valuation is \code{MLP.trace} and \code{MLP.Agree} routes each variable id to its trace
-value. The over-approximation direction (feasible set $\supseteq$ real behaviour) is
-essential: a looser encoding is harmless, a tighter-than-reality one unsound.
+\emph{What we proved (\code{coverage\_sound}).} \code{checkCoverage} lists all $2^k$
+on/off combinations of the branched neurons, then checks each one is matched by some
+leaf. If the check passes, then no matter what the real neurons do, some leaf
+applies. Proved by induction: the enumeration is complete (every real assignment agrees
+with some enumerated one on the relevant neurons), and our matching test is correct.
+$N_3$ never appears in any leaf, so it does not affect coverage---both its on/off
+states are handled inside each leaf.
 
-\paragraph{Step 8 --- refuting the leaf with an exact certificate.} With the negated
-goal $v_8-v_9\le\rho$ present, the leaf is a MILP (the binary $v_7$ survives). Exact
-\scip{} proves it infeasible and emits a \vipr{} file. We model the proof as a
-\code{RefTree} (a Farkas \code{leaf}, an integer \code{split}, or a round/derive node)
-and validate it with the \code{Bool} \code{checkRefTree}; \code{refTree\_sound} proves a
-valid tree $\Rightarrow$ no integer-valued valuation satisfies the rows. \emph{Proof:} a
-Farkas leaf is \code{farkas\_le}---from $y\ge0$, $y^{\!\top}\!A=0$, $y^{\!\top}b<0$ and a
-feasible $x$, $0=y^{\!\top}\!Ax\le y^{\!\top}b<0$; a \code{split} on the integer $v_7$
-uses \code{int\_split} ($v_7\le0\lor v_7\ge1$) and refutes each branch recursively; a
-round node uses \code{rnd\_sound}. Concretely, for the illustrative sub-instance
-$2x\ge1\wedge2x\le1$ (feasible at $x=\tfrac12$, no integer $x$) the tree splits $x$ at
-$0$: the $x\le0$ branch dies by $2(x\le0)+1(2x\ge1)\Rightarrow0\le-1$ and $x\ge1$ by
-$2(x\ge1)+1(2x\le1)\Rightarrow0\le-1$; \code{checkRefTree} returns \code{true}
-(verified). \code{vipr\_infeasible} composes this with the parser: a tree validated
-against \code{parseVipr}'s \code{CON} rows proves that system infeasible. (For a
-\emph{complete} pattern $N_1,\dots,N_4\ge0$, $\net$ is affine---
-$y_0-y_1=0.2\,p^{(2)}_0-0.3\,p^{(2)}_1+0.1$, an explicit $\alpha x_0+\beta x_1+\gamma$
-after substituting $p^{(2)}=W_2h^{(1)}+b_2$, $h^{(1)}=W_0x+b_0$---and the leaf needs a
-single Farkas leaf, no split.)
+\paragraph{Step 7 --- encoding a leaf as a system of inequalities.}
+Take leaf $\leaf_3=[2,1,4]$: neurons $N_2,N_1,N_4$ are ``on'' (their values are
+$\ge0$), while $N_3$ is unbranched (could be on or off). The encoder writes
+inequalities that any real network execution in this leaf \emph{must} satisfy:
+\begin{itemize}
+\item \textbf{Box:} the inputs are in range ($v_0\le2$, $-v_0\le2$, $v_1\le1$, $-v_1\le1$).
+\item \textbf{Affine equalities:} each layer's output equals the linear function of its
+      input, e.g.\ $v_2=-0.5v_0+0.2v_1-0.5$.
+\item \textbf{ReLU encoding for the unbranched $N_3$:} four inequalities using a $0/1$
+      helper variable $v_7$ to say ``$v_6=\max(v_4,0)$''; these use the range from
+      Step~4 ($[-0.43,0.86]$) as the ``big-$M$'' constants.
+\item \textbf{Sign constraints:} the leaf says $N_1,N_2,N_4\ge0$, so $v_2\ge0$,
+      $v_3\ge0$, $v_5\ge0$.
+\item \textbf{Negated property:} the objective $v_8-v_9\le\rho$ (the opposite of what
+      we want to prove).
+\end{itemize}
+In total: 23 rows + the objective row, over 15 variables.
 
-\paragraph{Step 9 --- composition (\code{certified\_sound\_*}).}
-\code{refute\_of\_cert} turns Step~8's infeasibility of ``rows $\wedge\ c\cdot y\le\rho$''
-into $c\cdot\net(x)>\rho$ on $\reg(\leaf)$, using Step~7: the real trace satisfies the
-rows with objective $=c\cdot\net(x)$, so it cannot also satisfy $c\cdot y\le\rho$, whence
-$c\cdot\net(x)>\rho$. \code{certified\_sound\_mlp\_satLeaf} phrases this per-leaf
-obligation through the coverage \code{satLeaf} interface so it plugs directly into
-\code{certified\_sound\_abstract} (coverage $\oplus$ per-leaf refutation $\Rightarrow
-\forall x\in\dom,\ c\cdot\net(x)>\rho$; Fig.~\ref{fig:thm}); and
-\code{certified\_sound\_network} transports the conclusion onto the \emph{parsed}
-\code{Network} via \code{toMLP\_eval} (Step~3).
+\emph{What we proved (\code{encoding\_overapprox\_mlp}).} If you plug in the
+\emph{true} network values (the actual $x$, the true pre/post values of each neuron,
+the true output), then \emph{every single row above is satisfied}, and the objective
+form evaluates to $c\cdot\net(x)$. This is proved by induction over the layers: each
+layer's rows hold because they are literally restating what the layer computes (affine)
+or what ReLU means (the four big-$M$ rows encode ``output = max(input, 0)''). The
+essential point: the encoding is a \emph{relaxation} --- the real execution is always
+inside the feasible set, but there may be ``extra'' fake solutions too. This means the
+encoding can never be over-tight (which would be unsound).
+
+\paragraph{Step 8 --- proving the leaf has no counterexample (certificate replay).}
+The system from Step~7 (the encoding rows plus the negated property) has no solution
+--- meaning every point that satisfies the encoding must \emph{violate} the negated
+property, i.e.\ $c\cdot\net(x)>\rho$. This is what we want, but we need proof.
+
+The external solver (exact \scip{}) reports ``infeasible'' and provides a certificate
+--- a list of derived constraints, each built from earlier ones by three kinds of
+steps:
+\begin{enumerate}
+\item \textbf{Add (lin):} multiply some existing rows by nonneg.\ weights and sum them.
+\item \textbf{Round (rnd):} if a row's left-hand side is always an integer, round the
+      right-hand side down.
+\item \textbf{Case-split (uns):} since $v_7$ is $0$ or $1$, split into two sub-problems
+      and refute each.
+\end{enumerate}
+The final derived row is $0\le-1$ (a contradiction), showing no solution exists.
+
+\emph{What we proved (\code{checkVipr\_sound}).} Our verified checker reads the
+certificate directly (no untrusted intermediate conversion) and re-does every step in
+exact arithmetic. At the end it checks that the contradiction has no remaining
+assumptions. The soundness theorem: if the checker accepts, then genuinely no
+assignment satisfies the rows. The proof goes by induction over the derivation list,
+using three lemmas: ``add'' is valid by the linearity of $\le$; ``round'' is valid
+because an integer $\le$ a fraction implies it $\le$ the floor; ``case-split'' is valid
+because an integer is either $\le k$ or $\ge k{+}1$.
+
+Concretely, for the small example $2x\ge1\wedge2x\le1$ with $x$ integer, the
+certificate splits $x$ at $0$: in the $x\le0$ branch, $2\!\cdot\!(x\le0)+1\!\cdot\!
+(2x\ge1)\Rightarrow 0\le-1$; in the $x\ge1$ branch, $2\!\cdot\!(x\ge1)+1\!\cdot\!
+(2x\le1)\Rightarrow 0\le-1$. Both branches reach a contradiction, so the system is
+infeasible --- our checker confirms (\code{checkVipr} returns \code{true}).
+
+\paragraph{Step 9 --- putting it together.}
+The logic chain:
+\begin{enumerate}
+\item Step~8 says the rows (from Step~7) together with $c\cdot y\le\rho$ have no solution.
+\item Step~7 says the real network execution \emph{does} satisfy those rows.
+\item Therefore the real execution must \emph{violate} $c\cdot y\le\rho$, i.e.\
+      $c\cdot\net(x)>\rho$ on this leaf.
+\end{enumerate}
+Repeat for all four leaves. Step~6 says every input belongs to some leaf. Together:
+$\forall x\in\dom,\ c\cdot\net(x)>\rho$ (Theorem~\ref{thm:main}). Finally, Step~3
+shows this applies to the actual parsed network (not just a separate mathematical
+copy), because the two compute the same thing.
 
 \paragraph{Verdict.} $\sound\iff$ coverage $\wedge$ every leaf refuted; composing
 (Theorem~\ref{thm:main}) gives $Y_0>Y_1$ on all of $\dom$. The property is tight:

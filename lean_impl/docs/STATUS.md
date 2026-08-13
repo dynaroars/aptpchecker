@@ -45,13 +45,14 @@ original Python tool's output on the sample files.
 
 ## What's NOT covered yet / caveats
 
-- **The verified soundness now reaches the runnable network, but the tool isn't
-  assembled into one command yet.** A proven bridge converts the actual parsed
-  network into the clean mathematical model and shows the two compute the same
-  outputs, so the guarantee applies to the executable network — not just an idealized
-  copy. What's still missing is gluing everything (parsers, network, checker) into a
-  single command-line program, plus the small *untrusted* step that turns the solver's
-  proof file into the tree the checker validates.
+- **The command-line tool (`aptpcheck`) is now assembled and runs end-to-end.**
+  It parses the network and proof tree, verifies coverage, encodes each leaf to
+  VIPR, invokes exact SCIP, then re-checks the certificate with the fully-verified
+  `checkVipr`. There is no untrusted converter on the checking path: the flat
+  certificate is read directly by the verified checker (which re-does all the math
+  itself). What's needed to *use* it in practice: an installed exact SCIP binary
+  (SoPlex-backed); without it, the tool can only report that it cannot reach the
+  solver.
 
 - **Only standard fully-connected ReLU networks are covered.** The proof applies
   to a "normal form" network: a first linear layer followed by any number of
@@ -61,13 +62,9 @@ original Python tool's output on the sample files.
   linear layers (or back-to-back ReLUs) are merged. **Convolutional networks
   (CNNs) are not covered yet** — that is planned future work.
 
-- **The command-line tool is not yet fully assembled** around the verified core.
-  (The solver-certificate checker itself is now complete and automatic: it handles
-  all three step kinds — add, round, and proof-by-cases — is proven correct, runs as
-  a `Bool` function, and connects to the certificate-file parser. What's left is only
-  gluing it, the network encoder, and the file readers into one runnable command,
-  plus the small *untrusted* step that turns the solver's proof file into the tree
-  the checker validates.)
+- **The command-line tool (`aptpcheck`) is assembled.** It handles all three
+  solver-certificate step kinds (add, round, case-split) in a single verified flat
+  checker. The only external dependency at runtime is an exact SCIP installation.
 
 Nothing outstanding requires trusting the external solver or any floating-point
 arithmetic — those stay outside the trusted core by design.
