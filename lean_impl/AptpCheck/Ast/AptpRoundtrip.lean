@@ -993,7 +993,7 @@ lemma nDecls_fold (ns : List Nat) (mi mo : Int) :
   | nil => intro nsAcc; simp
   | cons k ks ih =>
     intro nsAcc
-    rw [List.map_cons, List.foldl_cons, scanDeclsStep_n (mi, mo, nsAcc) k, ih (nsAcc.push k)]
-    congr 1; apply Array.toList_inj.mp; simp
+    rw [List.map_cons, List.foldl_cons, scanDeclsStep_n (mi, mo, nsAcc) k, ih (nsAcc.push k),
+      push_append_toArray]
 
 end AptpCheck.Ast.AptpRoundtrip
