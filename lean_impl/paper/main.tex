@@ -72,11 +72,14 @@ with \emph{no} appeal to floating point and \emph{no} trust in any external solv
 and it establishes that the proof leaves \emph{cover} the whole input region. We
 factor the end-to-end guarantee into three obligations---per-leaf refutation, region
 coverage, and encoding soundness---and prove that their conjunction implies the
-original property holds for \emph{every} input in the box. We report the current
-mechanization: the Farkas certificate check, the coverage check, and the two
-encoding-soundness cornerstones are machine-checked and axiom-clean, and the exact
-evaluator is validated bit-for-bit against an independent oracle. We describe the
-formalization, the trusted computing base, and the integration with \scip/\vipr.
+original property holds for \emph{every} input in the box. Mechanized and
+\emph{axiom-clean} so far: encoding soundness for \emph{arbitrary-depth} feed-forward
+ReLU networks (the full big-$M$ layer induction), a \emph{complete, automatic,
+runnable} proof-by-cases certificate checker over \vipr{} (Farkas / rounding / integer
+splits), the region-coverage check, and---moving them out of the trusted base---both
+input-file parsers, proved by round-trip. The exact evaluator is validated bit-for-bit
+against an independent oracle. We describe the formalization, the trusted computing
+base, and the integration with \scip/\vipr.
 \keywords{Neural network verification \and Proof checking \and Interactive
 theorem proving \and Lean \and Exact arithmetic \and Farkas certificates \and
 Mixed-integer programming.}
@@ -131,8 +134,10 @@ use of \code{native\_decide}, no floating point, and no trusted solver. Concrete
   \item We remove the trusted solver. We run the \emph{exact} solver \scip{}
     (\scip-Ex/SoPlex) as an \emph{untrusted oracle} and re-check its \vipr{}
     certificate~\cite{cheung2017vipr,eifler2022exact} inside \lean{} over exact
-    rationals; SCIP leaves the trusted computing base entirely
-    (\S\ref{sec:certificates}).
+    rationals; SCIP leaves the trusted computing base entirely. We mechanize a
+    \emph{complete, automatic, runnable} proof-by-cases checker over the three \vipr{}
+    step rules (Farkas combination, integer rounding, integer split), proved sound and
+    demonstrated running on a parsed certificate (\S\ref{sec:certificates}).
   \item We identify and correctly handle two subtleties that the original checker
     glosses: the propositional \emph{coverage} check is a \emph{sound
     over-approximation} that is only correct up to a global polarity symmetry, and
@@ -140,9 +145,14 @@ use of \code{native\_decide}, no floating point, and no trusted solver. Concrete
     unstable neurons free (\S\ref{sec:checking}--\ref{sec:certificates}).
   \item We isolate \emph{encoding soundness}---that the rational constraint system
     over-approximates the network's real behaviour on each region---as the central
-    theorem, and mechanize its two cornerstones (soundness of the big-$M$ ReLU
-    relaxation and validity of the exact interval bounds) for feed-forward \relu{}
-    networks (\S\ref{sec:formalization}).
+    theorem, and \emph{prove it for arbitrary-depth} feed-forward \relu{} MLPs: both
+    cornerstones (big-$M$ ReLU soundness, interval-bound validity) and the full
+    layer-induction assembly (\S\ref{sec:formalization}).
+  \item We \emph{verify both input parsers}---the exact network file and the
+    proof-tree file---by round-trip against printers, moving them out of the trusted
+    base; this required rewriting the parsers' \code{partial}/imperative loops as
+    total structural recursions without changing their behaviour
+    (\S\ref{sec:formalization}).
   \item We describe the exact-rational substrate, the bit-exact float-to-rational
     weight decoding, and the trusted computing base
     (\S\ref{sec:formalization}--\ref{sec:implementation}), and evaluate on APTP
@@ -433,9 +443,9 @@ future work.
 \paragraph{Correspondence.} A \vipr{} file is self-contained, so we additionally
 check that its \code{VAR}/\code{CON}/\code{OBJ} sections \emph{coincide} with the system
 $\tool$ built from the \code{.net} file, the box, and the leaf's splits---otherwise
-\scip{} could certify a different problem. This byte-level correspondence is part of
-$\tool$'s validation and is what links Lemma~\ref{lem:farkas}'s conclusion back to
-$\reg(\leaf)$.
+\scip{} could certify a different problem. This byte-level correspondence is checked
+when assembling the command-line pipeline (\S\ref{sec:implementation}) and is what
+links Lemma~\ref{lem:farkas}'s conclusion back to $\reg(\leaf)$.
 
 \section{Formalization in \lean{}~4}\label{sec:formalization}
 
@@ -497,13 +507,15 @@ consequence (\emph{soundness lemma}), then \emph{evaluated by the kernel} on con
 rationals. We deliberately avoid \code{native\_decide}: acceptance is a kernel
 reduction, so the compiler and runtime stay out of the trusted base.
 
-\paragraph{Mechanization status.} The following are proved and \emph{axiom-clean}
-(depending only on \code{propext}, \code{Classical.choice}, \code{Quot.sound}---no
-\code{sorry}, no \code{native\_decide}): the Farkas checking direction
-(Lemma~\ref{lem:farkas}, \code{farkas\_infeasible}), the coverage check
-(Lemma~\ref{lem:cover}, \code{coverage\_sound}, with a complete Boolean-cube
-enumeration proof), and the two encoding cornerstones (Lemmas~\ref{lem:relu}
-and~\ref{lem:ivl}). The exact substrate is validated operationally: the $\Q$
+\paragraph{Mechanization status.} Everything reported in this section is
+machine-checked and \emph{axiom-clean} (depending only on \code{propext},
+\code{Classical.choice}, \code{Quot.sound}---no \code{sorry}, no \code{native\_decide}).
+Foundationally: the Farkas checking direction (Lemma~\ref{lem:farkas},
+\code{farkas\_infeasible}), the coverage check (Lemma~\ref{lem:cover},
+\code{coverage\_sound}, with a complete Boolean-cube enumeration proof), and the two
+encoding cornerstones (Lemmas~\ref{lem:relu} and~\ref{lem:ivl}); the fuller results
+(arbitrary-depth encoding, the certificate checker, and both parsers) follow. The
+exact substrate is validated operationally: the $\Q$
 forward evaluator agrees \emph{bit-for-bit} with an independent rational forward pass
 on the running network, and the `.aptp`/`.net` parsers reproduce the reference
 Python parser's output on the sample proofs.
@@ -663,24 +675,24 @@ both the architecture and where the proof effort concentrates.
 
 \section{Implementation}\label{sec:implementation}
 
-\tool{} is a \lean{}~4 package (currently $\approx$1.5k lines, growing) built on
-\mathlib. Implemented: the exact numeric layer (\code{Numeric/Float}), the
-S-expression lexer and the \code{.aptp}/\code{.net}/\vipr{} parsers (\code{Ast/*}), the
-exact network evaluator (\code{Model/Network}), the encoding cornerstones and the
-executable encoder (\code{Model/Encoding}, \code{Model/Encoder}), the one-hidden-layer
-encoding-soundness proof (\code{Model/EncodingSound}), the Farkas check
-(\code{Cert/LinComb}), the coverage check (\code{Coverage/Tautology}), and the
-\code{lin}/\code{rnd}/\code{uns} certificate-step soundness with a \code{lin}-replay
-fold (\code{Cert/Vipr}), and the stage-by-stage `.net`-parser round-trips
-(\code{Ast/NetRoundtrip}). Under construction: the general-depth encoding induction, the
-automatic threading of \code{rnd}/\code{uns} into the replay fold, and the executable
-driver composing the pieces into Theorem~\ref{thm:main} (\code{Pipeline/*}). A
-command-line driver
-\code{aptpcheck -{}-net N.net -{}-aptp P.aptp -{}-vipr-dir D/} parses the inputs,
-validates each leaf certificate and the coverage condition, and prints the verdict; on
-\sound{} the accompanying \lean{} theorem is kernel-checkable. The proof format and
-neuron numbering match \pytool, so its proofs are consumed unchanged (given exact
-\vipr{} certificates from \scip).
+\tool{} is a \lean{}~4 package ($\approx$5.3k lines) built on \mathlib. Implemented and
+kernel-checked: the exact numeric layer (\code{Numeric/Float}); the S-expression lexer
+and the \code{.aptp}/\code{.net}/\vipr{} parsers (\code{Ast/*}) with full round-trip
+proofs (\code{Ast/NetRoundtrip}, \code{Ast/AptpRoundtrip}); the exact network evaluator
+(\code{Model/Network}); the encoding cornerstones and the executable encoder
+(\code{Model/Encoding}, \code{Model/Encoder}); the \emph{arbitrary-depth} MLP
+encoding-soundness proof (\code{Model/EncodingSound}); the Farkas checks
+(\code{Cert/LinComb}, \code{Cert/LinCon}); the coverage check
+(\code{Coverage/Tautology}); the complete proof-by-cases certificate checker
+(\code{Cert/Vipr}: \code{lin}/\code{rnd}/\code{uns} soundness, \code{RefTree}, the
+runnable \code{checkRefTree}); and the composition scaffolding plus the VIPR endpoint
+(\code{Pipeline/Compose}, \code{Pipeline/Affine}, \code{Pipeline/ViprCheck}). Under
+construction: bridging the dimension-indexed \code{MLP} soundness model to the
+executable \code{Array} encoder, Conv/CNN, and the command-line driver
+\code{aptpcheck -{}-net N.net -{}-aptp P.aptp -{}-vipr-dir D/} that composes the pieces
+into Theorem~\ref{thm:main} (\code{Pipeline/*}) and runs the untrusted
+flat-\vipr{}-to-tree conversion. The proof format and neuron numbering match \pytool,
+so its proofs are consumed unchanged (given exact \vipr{} certificates from \scip).
 
 \section{Evaluation}\label{sec:eval}
 
@@ -730,7 +742,8 @@ trusted by inspection; we re-implement and \emph{verify} such a checker in \lean
 \paragraph{Verified neural-network reasoning.} Prior efforts formalize robustness or
 network semantics in Coq/Isabelle and check certificates in
 Imandra~\cite{desmartin2022checkinn}. We are, to our knowledge, the first to give a
-kernel-checked, exact, end-to-end soundness proof for a \emph{verifier-independent}
+kernel-checked, exact soundness formalization---encoding, coverage, certificate
+checking, and both parsers all machine-checked---for a \emph{verifier-independent}
 NNV proof format backed by an untrusted MILP solver.
 
 \section{Conclusion}\label{sec:conclusion}
@@ -738,13 +751,15 @@ NNV proof format backed by an untrusted MILP solver.
 We presented \tool, an APTP proof checker formalized in \lean/\mathlib{} over exact
 rationals, trusting neither floating point nor any MILP solver: \scip{} runs untrusted
 and its \vipr{} certificate is re-checked in the kernel. The guarantee factors cleanly
-into per-leaf refutation, coverage, and encoding soundness; the Farkas check, the
-coverage check, and the two encoding cornerstones are already machine-checked and
-axiom-clean. Remaining work completes the end-to-end theorem---the encoding assembly
-and the \vipr{} \code{lin}/\code{rnd}/\code{uns} replay and their composition---after
-which we target \emph{completeness} (via \mathlib's Farkas/LP duality), a verified
-parser, convolutional and residual architectures at scale, and parallel certificate
-checking.
+into per-leaf refutation, coverage, and encoding soundness. Machine-checked and
+axiom-clean: encoding soundness for arbitrary-depth ReLU MLPs, a complete automatic
+proof-by-cases \vipr{} certificate checker (Farkas/rounding/split), the coverage
+check, and---out of the trusted base---both input parsers by round-trip. What remains
+is engineering, not new trust: bridging the dimension-indexed soundness model to the
+executable encoder, assembling the command-line driver (with an untrusted
+flat-\vipr{}-to-tree converter), and extending to convolutional and residual
+architectures at scale. We then target \emph{completeness} (via \mathlib's Farkas/LP
+duality) and parallel certificate checking.
 
 \bibliographystyle{splncs04}
 \bibliography{references}
