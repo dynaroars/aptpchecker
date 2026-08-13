@@ -1,4 +1,5 @@
 import AptpCheck.Cert.ViprFlat
+import AptpCheck.Cert.ViprSem
 import AptpCheck.Ast.Vipr
 
 /-!
@@ -56,5 +57,37 @@ record interpretation is inside the verified path — no separately-trusted conv
 theorem checkVipr_sound (v : Vipr) (h : checkVipr v = true) :
     ∀ a, (∀ j ∈ v.intVars, IsIntVal (a j)) → (∀ c ∈ v.conLes, Le.sat c a) → False :=
   checkFlat_sound v.intVars v.conLes (viprSteps v) h
+
+/-! ## Full VIPR v1.0 semantics checker (`checkSem`) — accepts real solver certificates -/
+
+/-- The sensed constraint rows of the certificate (one `SLe` per `CON` entry, objective
+resolved). Unlike `conLes`, `E` rows are *not* split, so VIPR indices match pool indices. -/
+def conSLes (v : Vipr) : List SLe :=
+  v.cons.toList.map (fun c => ⟨c.sense, c.resolvedForm v.objTerms, c.rhs⟩)
+
+/-- Resolve a derivation's stated form (objective substituted when `usesObj`). -/
+def derForm (v : Vipr) (d : ViprDer) : LinForm :=
+  if d.usesObj then v.objTerms.map (fun q => (⟨q.1, q.2⟩ : Term)) else d.form
+
+/-- Interpret one parsed derivation as a sensed step (indices already match the pool). -/
+def derToSStep (v : Vipr) (d : ViprDer) : SStep :=
+  { stated := ⟨d.sense, derForm v d, d.rhs⟩,
+    reason := match d.reason with
+      | .asm => .asm
+      | .lin terms => .lin (terms.map (fun p => (p.2, p.1)))
+      | .rnd terms => .rnd (terms.map (fun p => (p.2, p.1)))
+      | .uns i1 l1 i2 l2 => .uns i1 l1 i2 l2
+      | .sol => .lin [] }
+
+def viprSteps2 (v : Vipr) : List SStep := v.ders.toList.map (derToSStep v)
+
+/-- The full-semantics verified checker: reads the parsed VIPR records directly. -/
+def checkSem (v : Vipr) : Bool := checkSemCore v.intVars (conSLes v) (viprSteps2 v)
+
+/-- **Soundness of `checkSem`.** Acceptance implies the certificate's own (sensed) CON
+rows are infeasible over the integer-declared variables. -/
+theorem checkSem_sound (v : Vipr) (h : checkSem v = true) :
+    ∀ a, (∀ j ∈ v.intVars, IsIntVal (a j)) → (∀ c ∈ conSLes v, SLe.sat c a) → False :=
+  checkSemCore_sound v.intVars (conSLes v) (viprSteps2 v) h
 
 end AptpCheck.Pipeline

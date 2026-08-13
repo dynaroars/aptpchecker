@@ -203,4 +203,178 @@ theorem rndCheck_sound {intVars stated cs} (h : rndCheck intVars stated cs = tru
     have hr := rnd_ge (scomb cs).form (scomb cs).rhs a hInt hge
     rw [← hfe]; linarith [hrest.2]
 
+/-! ## Derivation replay over sensed constraints -/
+
+/-- A derivation step: the stated (sensed) row, and its reason (indices reference the
+running pool: base constraints `0..m-1`, then derivations). -/
+inductive SReason where
+  | asm
+  | lin (comb : List (ℚ × Nat))
+  | rnd (comb : List (ℚ × Nat))
+  | uns (i1 l1 i2 l2 : Nat)
+
+structure SStep where
+  stated : SLe
+  reason : SReason
+
+abbrev SPool := List (SLe × List SLe)
+def sdflt : SLe × List SLe := (⟨'L', [], 0⟩, [])
+def spoolRow (pool : SPool) (i : Nat) : SLe := (pool.getD i sdflt).1
+def spoolAsm (pool : SPool) (i : Nat) : List SLe := (pool.getD i sdflt).2
+def resolve (pool : SPool) (comb : List (ℚ × Nat)) : List (ℚ × SLe) :=
+  comb.map (fun p => (p.1, spoolRow pool p.2))
+
+/-- The pool entry a step produces (`uns` handled later; rejected for now). -/
+def sentryOf (pool : SPool) (s : SStep) : SLe × List SLe :=
+  match s.reason with
+  | .asm => (s.stated, [s.stated])
+  | .lin comb => (s.stated, comb.flatMap (fun p => spoolAsm pool p.2))
+  | .rnd comb => (s.stated, comb.flatMap (fun p => spoolAsm pool p.2))
+  | .uns _ _ _ _ => (s.stated, [])
+
+/-- Decidable step validity. -/
+def svalidB (intVars : List Nat) (pool : SPool) (s : SStep) : Bool :=
+  match s.reason with
+  | .asm => true
+  | .lin comb => linCheck s.stated (resolve pool comb)
+  | .rnd comb => rndCheck intVars s.stated (resolve pool comb)
+  | .uns _ _ _ _ => false
+
+/-- `e` holds at `a`: given base rows and `e`'s open assumptions, `e`'s row holds. -/
+def sentryHolds (base : List SLe) (a : Valuation) (e : SLe × List SLe) : Prop :=
+  (∀ c ∈ base, c.sat a) → (∀ s ∈ e.2, s.sat a) → e.1.sat a
+
+theorem sentryHolds_sdflt (base : List SLe) (a : Valuation) : sentryHolds base a sdflt := by
+  intro _ _; show (SLe.mk 'L' [] 0).sat a; simp [SLe.sat, LinForm.eval]
+
+theorem sentryHolds_getD (base : List SLe) (a : Valuation) (pool : SPool)
+    (hpool : ∀ e ∈ pool, sentryHolds base a e) (i : Nat) :
+    sentryHolds base a (pool.getD i sdflt) := by
+  by_cases h : i < pool.length
+  · rw [List.getD_eq_getElem pool sdflt h]; exact hpool _ (List.getElem_mem h)
+  · rw [List.getD_eq_default pool sdflt (by omega)]; exact sentryHolds_sdflt base a
+
+theorem spoolRow_holds (base : List SLe) (a : Valuation) (pool : SPool)
+    (hpool : ∀ e ∈ pool, sentryHolds base a e) (i : Nat)
+    (hbase : ∀ c ∈ base, c.sat a) (hasm : ∀ s ∈ spoolAsm pool i, s.sat a) :
+    (spoolRow pool i).sat a :=
+  sentryHolds_getD base a pool hpool i hbase hasm
+
+def sfreplay (pool : SPool) : List SStep → SPool
+  | [] => pool
+  | s :: ss => sfreplay (pool ++ [sentryOf pool s]) ss
+
+def sfvalidB (intVars : List Nat) (pool : SPool) : List SStep → Bool
+  | [] => true
+  | s :: ss => svalidB intVars pool s && sfvalidB intVars (pool ++ [sentryOf pool s]) ss
+
+/-- **Replay soundness.** -/
+theorem sfreplay_holds (base : List SLe) (intVars : List Nat) (a : Valuation)
+    (hint : ∀ j ∈ intVars, IsIntVal (a j)) :
+    ∀ (pool : SPool) (steps : List SStep),
+      sfvalidB intVars pool steps = true → (∀ e ∈ pool, sentryHolds base a e) →
+      ∀ e ∈ sfreplay pool steps, sentryHolds base a e := by
+  intro pool steps
+  induction steps generalizing pool with
+  | nil => intro _ hpool; simpa [sfreplay] using hpool
+  | cons s ss ih =>
+      intro hv hpool
+      rw [sfvalidB, Bool.and_eq_true] at hv
+      refine ih (pool ++ [sentryOf pool s]) hv.2 ?_
+      intro e he
+      rcases List.mem_append.mp he with h | h
+      · exact hpool e h
+      · rw [List.mem_singleton.mp h]
+        have hstep := hv.1
+        cases hr : s.reason with
+        | asm =>
+            simp only [sentryOf, hr]
+            intro _ hS; exact hS s.stated (by simp)
+        | lin comb =>
+            have hval : linCheck s.stated (resolve pool comb) = true := by
+              simp only [svalidB, hr] at hstep; exact hstep
+            simp only [sentryOf, hr]
+            intro hbase hS
+            refine linCheck_sound hval (fun p hp => ?_)
+            simp only [resolve, List.mem_map] at hp
+            obtain ⟨q, hq, rfl⟩ := hp
+            exact spoolRow_holds base a pool hpool q.2 hbase
+              (fun t ht => hS t (List.mem_flatMap.mpr ⟨q, hq, ht⟩))
+        | rnd comb =>
+            have hval : rndCheck intVars s.stated (resolve pool comb) = true := by
+              simp only [svalidB, hr] at hstep; exact hstep
+            simp only [sentryOf, hr]
+            intro hbase hS
+            refine rndCheck_sound hval hint (fun p hp => ?_)
+            simp only [resolve, List.mem_map] at hp
+            obtain ⟨q, hq, rfl⟩ := hp
+            exact spoolRow_holds base a pool hpool q.2 hbase
+              (fun t ht => hS t (List.mem_flatMap.mpr ⟨q, hq, ht⟩))
+        | uns i1 l1 i2 l2 =>
+            simp [svalidB, hr] at hstep
+
+/-! ## Acceptance -/
+
+/-- An absurdity (identically-zero form, rhs contradicting the sense). -/
+def absurdB (c : SLe) : Bool :=
+  formIsZero c.form &&
+  (if c.sense = 'L' then decide (c.rhs < 0)
+   else if c.sense = 'G' then decide (0 < c.rhs)
+   else if c.sense = 'E' then decide (c.rhs ≠ 0)
+   else false)
+
+theorem absurd_unsat {c : SLe} (h : absurdB c = true) (a : Valuation) : ¬ c.sat a := by
+  simp only [absurdB, Bool.and_eq_true] at h
+  obtain ⟨hz, hcase⟩ := h
+  have hze := formIsZero_sound _ hz a
+  simp only [SLe.sat]
+  split_ifs at hcase ⊢ with hL hG hE
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact fun hh => hcase hh.symm
+
+/-- Initial pool from the base (CON) rows, each with no assumptions. -/
+def sinitPool (base : List SLe) : SPool := base.map (fun c => (c, ([] : List SLe)))
+
+theorem sinitPool_holds (base : List SLe) (a : Valuation) :
+    ∀ e ∈ sinitPool base, sentryHolds base a e := by
+  intro e he
+  simp only [sinitPool, List.mem_map] at he
+  obtain ⟨c, hc, rfl⟩ := he
+  intro hbase _; exact hbase c hc
+
+/-- **Certificate ⟹ infeasibility.** A valid replay ending in an absurdity with no open
+assumptions proves the base (CON) rows infeasible over integer-declared variables. -/
+theorem sem_infeasible (base : List SLe) (intVars : List Nat) (steps : List SStep)
+    (hv : sfvalidB intVars (sinitPool base) steps = true)
+    (e : SLe × List SLe) (hmem : e ∈ sfreplay (sinitPool base) steps)
+    (hasm : e.2 = []) (habs : absurdB e.1 = true) :
+    ∀ a, (∀ j ∈ intVars, IsIntVal (a j)) → (∀ c ∈ base, c.sat a) → False := by
+  intro a hint hbase
+  have hall := sfreplay_holds base intVars a hint (sinitPool base) steps hv (sinitPool_holds base a)
+  have hE : sentryHolds base a e := hall e hmem
+  have hsat : e.1.sat a := hE hbase (by rw [hasm]; intro s hs; simp at hs)
+  exact absurd_unsat habs a hsat
+
+/-- Runnable checker over an abstract base + step list. -/
+def checkSemCore (intVars : List Nat) (base : List SLe) (steps : List SStep) : Bool :=
+  sfvalidB intVars (sinitPool base) steps &&
+  (match (sfreplay (sinitPool base) steps).getLast? with
+   | some e => absurdB e.1 && e.2.isEmpty
+   | none => false)
+
+/-- **Soundness of the runnable checker.** -/
+theorem checkSemCore_sound (intVars : List Nat) (base : List SLe) (steps : List SStep)
+    (h : checkSemCore intVars base steps = true) :
+    ∀ a, (∀ j ∈ intVars, IsIntVal (a j)) → (∀ c ∈ base, c.sat a) → False := by
+  simp only [checkSemCore, Bool.and_eq_true] at h
+  obtain ⟨hv, hacc⟩ := h
+  rcases hgl : (sfreplay (sinitPool base) steps).getLast? with _ | e
+  · rw [hgl] at hacc; simp at hacc
+  · rw [hgl] at hacc; simp only [Bool.and_eq_true] at hacc
+    obtain ⟨habs, hemp⟩ := hacc
+    have hasm : e.2 = [] := by
+      cases hc : e.2 with | nil => rfl | cons x t => rw [hc] at hemp; simp at hemp
+    exact sem_infeasible base intVars steps hv e (List.mem_of_getLast? hgl) hasm habs
+
 end AptpCheck.Cert
