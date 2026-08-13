@@ -996,4 +996,371 @@ lemma nDecls_fold (ns : List Nat) (mi mo : Int) :
     rw [List.map_cons, List.foldl_cons, scanDeclsStep_n (mi, mo, nsAcc) k, ih (nsAcc.push k),
       push_append_toArray]
 
+/-! ## Printed-statement well-formedness and cleanliness
+
+The end-to-end assembly needs each printed statement S-expression to be `WF`
+(all atoms `GoodStr`), and its printed character form to be a `CleanBalLine`
+(newline-free, trim/comment-invariant, nonempty, balanced parens) so the
+statement reader (`readStatementsFold_multi`) reads it back as one statement. -/
+
+/-- A digit character is usable inside an atom and is not `;`. -/
+lemma digit_good {c : Char} (h : c.isDigit = true) : IsTokChar c ∧ c ≠ ';' := by
+  have hb : ('0' ≤ c) ∧ (c ≤ '9') := by
+    unfold Char.isDigit at h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    exact h
+  obtain ⟨h0, h9⟩ := hb
+  have hlp : c ≠ '(' := (lt_of_lt_of_le (by decide) h0).ne'
+  have hrp : c ≠ ')' := (lt_of_lt_of_le (by decide) h0).ne'
+  have hsp : c ≠ ' ' := (lt_of_lt_of_le (by decide) h0).ne'
+  have htab : c ≠ '\t' := (lt_of_lt_of_le (by decide) h0).ne'
+  have hcr : c ≠ '\r' := (lt_of_lt_of_le (by decide) h0).ne'
+  have hnl : c ≠ '\n' := (lt_of_lt_of_le (by decide) h0).ne'
+  have hsemi : c ≠ ';' := (lt_of_le_of_lt h9 (by decide)).ne
+  refine ⟨⟨?_, ?_⟩, hsemi⟩
+  · rw [Bool.or_eq_false_iff]
+    exact ⟨by simpa using hlp, by simpa using hrp⟩
+  · unfold Char.isWhitespace
+    simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not]
+    exact ⟨⟨⟨hsp, htab⟩, hcr⟩, hnl⟩
+
+/-- A printed variable name `P_n` (with `P` a good char) is a `GoodStr`. -/
+lemma varNameChars_good (p : Char) (n : Nat) (hp : IsTokChar p ∧ p ≠ ';') :
+    GoodStr (varNameChars p n) := by
+  refine ⟨by simp [varNameChars], ?_⟩
+  intro c hc
+  simp only [varNameChars, List.mem_cons] at hc
+  rcases hc with rfl | rfl | hc
+  · exact hp
+  · exact ⟨⟨by decide, by decide⟩, by decide⟩
+  · exact natToDigits_good n c hc
+
+/-- A well-formed raw decimal prints to a `GoodStr`. -/
+lemma rawDec_chars_good (d : RawDec) (hd : d.WF) : GoodStr (RawDec.chars d) := by
+  obtain ⟨⟨hine, hidig⟩, hfdig⟩ := hd
+  refine ⟨by simp [RawDec.chars], ?_⟩
+  intro c hc
+  simp only [RawDec.chars, List.mem_append, List.mem_cons] at hc
+  rcases hc with (rfl | hc) | hc
+  · split_ifs <;> exact ⟨⟨by decide, by decide⟩, by decide⟩
+  · exact digit_good (hidig c hc)
+  · by_cases hfe : d.fracDigits.isEmpty
+    · simp only [hfe, if_true, List.not_mem_nil] at hc
+    · simp only [hfe, Bool.false_eq_true, if_false, List.mem_cons] at hc
+      rcases hc with rfl | hc
+      · exact ⟨⟨by decide, by decide⟩, by decide⟩
+      · exact digit_good (hfdig c hc)
+
+-- Fixed-atom goodness (each char checked individually).
+lemma good_declConst : GoodStr "declare-const".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_declPwl : GoodStr "declare-pwl".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_Real : GoodStr "Real".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_assert : GoodStr "assert".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_ge : GoodStr ">=".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_le : GoodStr "<=".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_lt : GoodStr "<".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_or : GoodStr "or".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+lemma good_and : GoodStr "and".toList := by
+  refine goodStr_of _ (by decide) ?_; intro c hc; fin_cases hc <;> exact ⟨by decide, by decide, by decide⟩
+
+lemma wf_atom_lit {s : String} (h : GoodStr s.toList) : WF (.atom s) := WF.atom s h
+lemma wf_atom_ofList (l : List Char) (h : GoodStr l) : WF (.atom (String.ofList l)) := by
+  apply WF.atom; rw [String.toList_ofList]; exact h
+
+lemma WF_xDeclSexp (i : Nat) : WF (xDeclSexp i) := by
+  apply WF.list; intro e he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl
+  · exact wf_atom_lit good_declConst
+  · exact wf_atom_ofList _ (varNameChars_good 'X' i ⟨⟨by decide, by decide⟩, by decide⟩)
+  · exact wf_atom_lit good_Real
+
+lemma WF_yDeclSexp (j : Nat) : WF (yDeclSexp j) := by
+  apply WF.list; intro e he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl
+  · exact wf_atom_lit good_declConst
+  · exact wf_atom_ofList _ (varNameChars_good 'Y' j ⟨⟨by decide, by decide⟩, by decide⟩)
+  · exact wf_atom_lit good_Real
+
+lemma WF_nDeclSexp (k : Nat) : WF (nDeclSexp k) := by
+  apply WF.list; intro e he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl
+  · exact wf_atom_lit good_declPwl
+  · exact wf_atom_ofList _ (varNameChars_good 'N' k ⟨⟨by decide, by decide⟩, by decide⟩)
+  · exact wf_atom_lit good_ReLU
+
+lemma WF_boxLoSexp (i : Nat) (d : RawDec) (hd : d.WF) : WF (boxLoSexp i d) := by
+  apply WF.list; intro e he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl
+  · exact wf_atom_lit good_assert
+  · apply WF.list; intro e' he'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he'
+    rcases he' with rfl | rfl | rfl
+    · exact wf_atom_lit good_ge
+    · exact wf_atom_ofList _ (varNameChars_good 'X' i ⟨⟨by decide, by decide⟩, by decide⟩)
+    · exact wf_atom_ofList _ (rawDec_chars_good d hd)
+
+lemma WF_boxHiSexp (i : Nat) (d : RawDec) (hd : d.WF) : WF (boxHiSexp i d) := by
+  apply WF.list; intro e he
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl
+  · exact wf_atom_lit good_assert
+  · apply WF.list; intro e' he'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he'
+    rcases he' with rfl | rfl | rfl
+    · exact wf_atom_lit good_le
+    · exact wf_atom_ofList _ (varNameChars_good 'X' i ⟨⟨by decide, by decide⟩, by decide⟩)
+    · exact wf_atom_ofList _ (rawDec_chars_good d hd)
+
+lemma WF_objSexp (o : RawObj) (hwf : WFObj o) : WF (objSexp o) := by
+  cases o with
+  | diff i j =>
+    apply WF.list; intro e he
+    simp only [objSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+    rcases he with rfl | rfl
+    · exact wf_atom_lit good_assert
+    · apply WF.list; intro e' he'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at he'
+      rcases he' with rfl | rfl | rfl
+      · exact wf_atom_lit good_le
+      · exact wf_atom_ofList _ (varNameChars_good 'Y' i ⟨⟨by decide, by decide⟩, by decide⟩)
+      · exact wf_atom_ofList _ (varNameChars_good 'Y' j ⟨⟨by decide, by decide⟩, by decide⟩)
+  | ub i d =>
+    apply WF.list; intro e he
+    simp only [objSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+    rcases he with rfl | rfl
+    · exact wf_atom_lit good_assert
+    · apply WF.list; intro e' he'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at he'
+      rcases he' with rfl | rfl | rfl
+      · exact wf_atom_lit good_le
+      · exact wf_atom_ofList _ (varNameChars_good 'Y' i ⟨⟨by decide, by decide⟩, by decide⟩)
+      · exact wf_atom_ofList _ (rawDec_chars_good d hwf)
+
+lemma WF_leafItemSexp (k : Int) : WF (leafItemSexp k) := by
+  have hz : WF (Sexp.atom (String.ofList zeroDec.chars)) :=
+    wf_atom_ofList _ (rawDec_chars_good zeroDec zeroDec_wf)
+  unfold leafItemSexp
+  split
+  · apply WF.list; intro e he
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+    rcases he with rfl | rfl | rfl
+    · exact wf_atom_lit good_ge
+    · exact wf_atom_ofList _ (varNameChars_good 'N' k.toNat ⟨⟨by decide, by decide⟩, by decide⟩)
+    · exact hz
+  · apply WF.list; intro e he
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+    rcases he with rfl | rfl | rfl
+    · exact wf_atom_lit good_lt
+    · exact wf_atom_ofList _ (varNameChars_good 'N' (-k).toNat ⟨⟨by decide, by decide⟩, by decide⟩)
+    · exact hz
+
+lemma WF_leafClause (L : List Int) : WF (leafClause L) := by
+  apply WF.list; intro e he
+  simp only [leafClause, List.mem_cons] at he
+  rcases he with rfl | he
+  · exact wf_atom_lit good_and
+  · obtain ⟨k, _, rfl⟩ := List.mem_map.mp he
+    exact WF_leafItemSexp k
+
+lemma WF_orAssertSexp (leaves : List (List Int)) : WF (orAssertSexp leaves) := by
+  apply WF.list; intro e he
+  simp only [orAssertSexp, List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl
+  · exact wf_atom_lit good_assert
+  · apply WF.list; intro e' he'
+    simp only [List.mem_cons] at he'
+    rcases he' with rfl | he'
+    · exact wf_atom_lit good_or
+    · obtain ⟨L, _, rfl⟩ := List.mem_map.mp he'
+      exact WF_leafClause L
+
+/-- A printed token char-list: a paren, or a good atom. -/
+def PTok (t : List Char) : Prop := t = ['('] ∨ t = [')'] ∨ GoodStr t
+
+lemma ptok_props {t : List Char} (h : PTok t) :
+    t ≠ [] ∧ ∀ c ∈ t, c ≠ ';' ∧ c ≠ '\n' ∧ c.isWhitespace = false := by
+  rcases h with rfl | rfl | hg
+  · refine ⟨by simp, ?_⟩; intro c hc; simp only [List.mem_singleton] at hc; subst hc
+    exact ⟨by decide, by decide, by decide⟩
+  · refine ⟨by simp, ?_⟩; intro c hc; simp only [List.mem_singleton] at hc; subst hc
+    exact ⟨by decide, by decide, by decide⟩
+  · obtain ⟨hne, hchars⟩ := hg
+    refine ⟨hne, ?_⟩; intro c hc
+    obtain ⟨htc, hsemi⟩ := hchars c hc
+    exact ⟨hsemi, isTokChar_ne_newline htc, htc.2⟩
+
+mutual
+/-- Every printed char-list token of a `WF` S-expression is a `PTok`. -/
+lemma sexpToks_ptok (e : Sexp) (hwf : WF e) : ∀ t ∈ (sexpToks e).map String.toList, PTok t := by
+  match e, hwf with
+  | .atom s, .atom _ hg =>
+    intro t ht
+    simp only [sexpToks, List.map_cons, List.map_nil, List.mem_singleton] at ht
+    subst ht; exact Or.inr (Or.inr hg)
+  | .list xs, .list _ hxs =>
+    intro t ht
+    simp only [sexpToks, List.map_cons, List.map_append, List.map_nil, List.mem_cons,
+      List.mem_append, List.not_mem_nil, or_false] at ht
+    rcases ht with rfl | ht | rfl
+    · exact Or.inl (by decide)
+    · exact sexpListToks_ptok xs hxs t ht
+    · exact Or.inr (Or.inl (by decide))
+lemma sexpListToks_ptok (es : List Sexp) (hwf : ∀ e ∈ es, WF e) :
+    ∀ t ∈ (sexpListToks es).map String.toList, PTok t := by
+  match es, hwf with
+  | [], _ => intro t ht; simp [sexpListToks] at ht
+  | e :: es', hwf =>
+    intro t ht
+    simp only [sexpListToks, List.map_append, List.mem_append] at ht
+    rcases ht with ht | ht
+    · exact sexpToks_ptok e (hwf e (List.mem_cons_self ..)) t ht
+    · exact sexpListToks_ptok es' (fun x hx => hwf x (List.mem_cons_of_mem _ hx)) t ht
+end
+
+/-- Char count over `jn` sums per-token counts (`' '` separators are ignored). -/
+lemma countP_jn (p : Char → Bool) (hp : p ' ' = false) :
+    ∀ (ss : List (List Char)), (jn ss).countP p = (ss.map (fun t => t.countP p)).sum := by
+  intro ss
+  induction ss with
+  | nil => simp [jn]
+  | cons s ss ih =>
+    have hjn : jn (s :: ss) = ' ' :: (s ++ jn ss) := by simp [jn]
+    rw [hjn, List.countP_cons, List.countP_append, ih, hp]
+    simp [List.map_cons]
+
+/-- Char count over `joinSp` sums per-token counts (`' '` separators are ignored). -/
+lemma countP_joinSp (p : Char → Bool) (hp : p ' ' = false) :
+    ∀ (ss : List (List Char)), (joinSp ss).countP p = (ss.map (fun t => t.countP p)).sum := by
+  intro ss
+  cases ss with
+  | nil => simp [joinSp]
+  | cons s ss =>
+    simp only [joinSp, List.countP_append, countP_jn p hp, List.map_cons, List.sum_cons]
+
+mutual
+/-- Printed S-expression tokens have balanced `(`/`)` char counts. -/
+lemma sexpToks_balSum (e : Sexp) (hwf : WF e) :
+    ((sexpToks e).map (fun t => t.toList.countP (· == '('))).sum
+      = ((sexpToks e).map (fun t => t.toList.countP (· == ')'))).sum := by
+  match e, hwf with
+  | .atom s, .atom _ hg =>
+    have hlp : s.toList.countP (· == '(') = 0 := List.countP_eq_zero.mpr (fun c hc => by
+      have := (isTokChar_notParen (hg.2 c hc).1).1; simpa using this)
+    have hrp : s.toList.countP (· == ')') = 0 := List.countP_eq_zero.mpr (fun c hc => by
+      have := (isTokChar_notParen (hg.2 c hc).1).2; simpa using this)
+    simp [sexpToks, hlp, hrp]
+  | .list xs, .list _ hxs =>
+    simp only [sexpToks, List.map_cons, List.map_append, List.map_nil, List.sum_cons,
+      List.sum_append, List.sum_nil, add_zero]
+    have e1 : "(".toList.countP (· == '(') = 1 := by decide
+    have e2 : ")".toList.countP (· == '(') = 0 := by decide
+    have e3 : "(".toList.countP (· == ')') = 0 := by decide
+    have e4 : ")".toList.countP (· == ')') = 1 := by decide
+    rw [e1, e2, e3, e4, sexpListToks_balSum xs hxs]; omega
+lemma sexpListToks_balSum (es : List Sexp) (hwf : ∀ e ∈ es, WF e) :
+    ((sexpListToks es).map (fun t => t.toList.countP (· == '('))).sum
+      = ((sexpListToks es).map (fun t => t.toList.countP (· == ')'))).sum := by
+  match es, hwf with
+  | [], _ => simp [sexpListToks]
+  | e :: es', hwf =>
+    simp only [sexpListToks, List.map_append, List.sum_append]
+    rw [sexpToks_balSum e (hwf e (List.mem_cons_self ..)),
+      sexpListToks_balSum es' (fun x hx => hwf x (List.mem_cons_of_mem _ hx))]
+end
+
+/-- The printed form of a `WF` statement has balanced parentheses. -/
+lemma stmtChars_balanced (e : Sexp) (hwf : WF e) :
+    (stmtChars e).countP (· == '(') = (stmtChars e).countP (· == ')') := by
+  unfold stmtChars
+  rw [countP_joinSp (· == '(') (by decide), countP_joinSp (· == ')') (by decide),
+    List.map_map, List.map_map]
+  exact sexpToks_balSum e hwf
+
+lemma ltrim_joinSp_headNW (c : Char) (cs : List Char) (ms : List (List Char))
+    (hcw : c.isWhitespace = false) :
+    ltrim (joinSp ((c :: cs) :: ms)) = joinSp ((c :: cs) :: ms) := by
+  simp only [joinSp, List.cons_append]
+  exact ltrim_cons_nonWs c (cs ++ jn ms) hcw
+
+lemma ltrim_joinSp_ptok (M : List (List Char)) (hne : M ≠ []) (h : ∀ t ∈ M, PTok t) :
+    ltrim (joinSp M) = joinSp M := by
+  obtain ⟨m, ms, rfl⟩ := List.exists_cons_of_ne_nil hne
+  obtain ⟨hmne, hmchars⟩ := ptok_props (h m (List.mem_cons_self ..))
+  obtain ⟨c, cs, rfl⟩ := List.exists_cons_of_ne_nil hmne
+  exact ltrim_joinSp_headNW c cs ms (hmchars c (List.mem_cons_self ..)).2.2
+
+lemma rtrim_joinSp_snoc (front : List (List Char)) (t' : List Char) (d : Char)
+    (hd : d.isWhitespace = false) :
+    rtrim (joinSp (front ++ [t' ++ [d]])) = joinSp (front ++ [t' ++ [d]]) := by
+  cases front with
+  | nil =>
+    simp only [List.nil_append, joinSp, jn, List.append_nil]
+    exact rtrim_append_nonWs t' d hd
+  | cons s xs =>
+    rw [joinSp_append_singleton]
+    rw [show joinSp (s :: xs) ++ ' ' :: (t' ++ [d]) = (joinSp (s :: xs) ++ ' ' :: t') ++ [d] from by
+      simp [List.append_assoc]]
+    exact rtrim_append_nonWs _ d hd
+
+lemma ptok_last (t : List Char) (h : PTok t) : ∃ t' d, t = t' ++ [d] ∧ d.isWhitespace = false := by
+  obtain ⟨hne, hchars⟩ := ptok_props h
+  rcases List.eq_nil_or_concat t with h0 | ⟨t', d, hcc⟩
+  · exact absurd h0 hne
+  · rw [List.concat_eq_append] at hcc; subst hcc
+    exact ⟨t', d, rfl, (hchars d (by simp)).2.2⟩
+
+lemma rtrim_joinSp_ptok (M : List (List Char)) (hne : M ≠ []) (h : ∀ t ∈ M, PTok t) :
+    rtrim (joinSp M) = joinSp M := by
+  rcases List.eq_nil_or_concat M with h0 | ⟨front, t, hcc⟩
+  · exact absurd h0 hne
+  · rw [List.concat_eq_append] at hcc; subst hcc
+    obtain ⟨t', d, htd, hd⟩ := ptok_last t (h t (by simp))
+    rw [htd]; exact rtrim_joinSp_snoc front t' d hd
+
+lemma stmtChars_ne_nil (e : Sexp) (hwf : WF e) : stmtChars e ≠ [] := by
+  unfold stmtChars
+  have hne : (sexpToks e).map String.toList ≠ [] := by cases e <;> simp [sexpToks]
+  obtain ⟨m, ms, hM⟩ := List.exists_cons_of_ne_nil hne
+  rw [hM]
+  have hmp : PTok m := sexpToks_ptok e hwf m (by rw [hM]; exact List.mem_cons_self ..)
+  obtain ⟨c, cs, rfl⟩ := List.exists_cons_of_ne_nil (ptok_props hmp).1
+  simp [joinSp]
+
+/-- **Printed statement is a clean, balanced line.** The character form of any
+`WF` S-expression is exactly the shape `readStatementsFold_multi` expects. -/
+theorem stmtChars_cleanBal (e : Sexp) (hwf : WF e) : CleanBalLine (stmtChars e) := by
+  have hM : (sexpToks e).map String.toList ≠ [] := by cases e <;> simp [sexpToks]
+  have hp : ∀ t ∈ (sexpToks e).map String.toList, PTok t := sexpToks_ptok e hwf
+  have hnl : ∀ c ∈ stmtChars e, c ≠ '\n' := by
+    intro c hc
+    rcases mem_joinSp (by rw [← stmtChars]; exact hc) with rfl | ⟨s, hs, hcs⟩
+    · decide
+    · exact ((ptok_props (hp s hs)).2 c hcs).2.1
+  have hsemi : ∀ c ∈ stmtChars e, c ≠ ';' := by
+    intro c hc
+    rcases mem_joinSp (by rw [← stmtChars]; exact hc) with rfl | ⟨s, hs, hcs⟩
+    · decide
+    · exact ((ptok_props (hp s hs)).2 c hcs).1
+  have hlt : ltrim (stmtChars e) = stmtChars e := ltrim_joinSp_ptok _ hM hp
+  have hrt : rtrim (stmtChars e) = stmtChars e := rtrim_joinSp_ptok _ hM hp
+  have hbs : beforeSemicolon (stmtChars e) = stmtChars e := beforeSemicolon_eq_self _ hsemi
+  refine ⟨fun h => (hnl '\n' h) rfl, ?_, stmtChars_ne_nil e hwf, stmtChars_balanced e hwf⟩
+  calc rtrim (beforeSemicolon (trimC (stmtChars e)))
+      = rtrim (beforeSemicolon (rtrim (ltrim (stmtChars e)))) := by rw [trimC]
+    _ = rtrim (beforeSemicolon (stmtChars e)) := by rw [hlt, hrt]
+    _ = rtrim (stmtChars e) := by rw [hbs]
+    _ = stmtChars e := hrt
+
 end AptpCheck.Ast.AptpRoundtrip
