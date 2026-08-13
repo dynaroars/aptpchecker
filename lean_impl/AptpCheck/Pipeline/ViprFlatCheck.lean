@@ -37,7 +37,7 @@ def reasonToF (v : Vipr) (d : ViprDer) : FReason :=
   match d.reason with
   | .asm       => .asm ((senseToLes d.sense d.form d.rhs).headD ⟨[], 0⟩)
   | .lin terms => .lin (terms.map (fun p => (p.2, p.1)))
-  | .rnd terms => .lin (terms.map (fun p => (p.2, p.1)))   -- rounding not modelled: re-checked ⇒ reject if it mattered
+  | .rnd terms => .rnd (terms.map (fun p => (p.2, p.1)))
   | .uns i1 l1 i2 l2 =>
       let lo := viprRow v l1
       let j := (lo.form.head?).elim 0 (fun t => t.idx)

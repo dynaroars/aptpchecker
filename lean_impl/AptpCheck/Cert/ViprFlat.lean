@@ -32,6 +32,7 @@ of the integer split `x_j ≤ k`/`x_j ≥ k+1` on children `i1`,`i2`. -/
 inductive FReason where
   | asm (r : Le)
   | lin (comb : List (ℚ × Nat))
+  | rnd (comb : List (ℚ × Nat))
   | uns (i1 i2 j : Nat) (k : ℤ)
 
 /-- The pool entry a step produces. -/
@@ -40,14 +41,23 @@ def entryOf (pool : Pool) : FReason → (Le × List Le)
   | .lin comb =>
       (combine (comb.map (fun p => (p.1, poolRow pool p.2))),
        comb.flatMap (fun p => poolAsm pool p.2))
+  | .rnd comb =>
+      (deriveRow (comb.map (fun p => (p.1, poolRow pool p.2))) true,
+       comb.flatMap (fun p => poolAsm pool p.2))
   | .uns i1 i2 j k =>
       (poolRow pool i1,
        (poolAsm pool i1).erase (leLower j (k : ℚ)) ++ (poolAsm pool i2).erase (leUpper j (k : ℚ)))
 
-/-- Well-formedness of a step against the current pool and the integer-var set. -/
+/-- Well-formedness of a step against the current pool and the integer-var set. `rnd`
+additionally requires the combined form to be integer-valued (integer coefficients on
+integer-declared variables), which justifies rounding the constant down. -/
 def rvalid (intVars : List Nat) (pool : Pool) : FReason → Prop
   | .asm _ => True
   | .lin comb => ∀ p ∈ comb, 0 ≤ p.1
+  | .rnd comb =>
+      (∀ p ∈ comb, 0 ≤ p.1) ∧
+      (∀ t ∈ combineForm (comb.map (fun p => (p.1, poolRow pool p.2))),
+        IsIntVal t.coeff ∧ t.idx ∈ intVars)
   | .uns i1 i2 j k =>
       j ∈ intVars ∧ poolRow pool i1 = poolRow pool i2 ∧
       leLower j (k : ℚ) ∈ poolAsm pool i1 ∧ leUpper j (k : ℚ) ∈ poolAsm pool i2
@@ -87,6 +97,24 @@ theorem poolRow_holds (base : List Le) (a : Valuation) (pool : Pool)
     Le.sat (poolRow pool i) a :=
   entryHolds_getD base a pool hpool i hbase hasm
 
+/-- Soundness of one `rnd` step over an abstract combination: a nonnegative combination
+of satisfied `≤`-rows whose combined form is integer-valued yields the rounded-down
+constraint. Stated over an abstract `comb'` to keep elaboration cheap. -/
+theorem rnd_sat (comb' : List (ℚ × Le)) (a : Valuation)
+    (hnn : ∀ q ∈ comb', 0 ≤ q.1) (hsat : ∀ q ∈ comb', Le.sat q.2 a)
+    (hInt : ∀ t ∈ combineForm comb', IsIntVal t.coeff ∧ IsIntVal (a t.idx)) :
+    Le.sat (deriveRow comb' true) a := by
+  have hr := rnd_sound (combineForm comb') (combine comb').rhs a
+    (LinForm.eval_isInt (combineForm comb') a hInt) (lin_sound comb' a hnn hsat)
+  simpa [deriveRow] using hr
+
+/-- Definitional shape of a `rnd` entry (used to expose the combination for
+`generalize`, keeping the floor/coercion defeq over a plain variable). -/
+theorem entryOf_rnd (pool : Pool) (comb : List (ℚ × Nat)) :
+    entryOf pool (FReason.rnd comb) =
+      (deriveRow (comb.map (fun p => (p.1, poolRow pool p.2))) true,
+       comb.flatMap (fun p => poolAsm pool p.2)) := rfl
+
 /-- **Core soundness of the flat replay.** If the replay is valid and every current
 pool entry holds at `a`, then every entry of the replayed pool holds at `a`. -/
 theorem freplay_holds (base : List Le) (intVars : List Nat) (a : Valuation)
@@ -122,6 +150,23 @@ theorem freplay_holds (base : List Le) (intVars : List Nat) (a : Valuation)
               obtain ⟨p, hp, rfl⟩ := hq
               refine poolRow_holds base a pool hpool p.2 hbase (fun s hs => ?_)
               exact hS s (List.mem_flatMap.mpr ⟨p, hp, hs⟩)
+        | rnd comb =>
+            obtain ⟨hnn, hintg⟩ := hr
+            rw [entryOf_rnd]
+            intro hbase hS
+            have h1 : ∀ q ∈ comb.map (fun p => (p.1, poolRow pool p.2)), 0 ≤ q.1 := by
+              intro q hq; simp only [List.mem_map] at hq
+              obtain ⟨p, hp, rfl⟩ := hq; exact hnn p hp
+            have h2 : ∀ q ∈ comb.map (fun p => (p.1, poolRow pool p.2)), Le.sat q.2 a := by
+              intro q hq; simp only [List.mem_map] at hq
+              obtain ⟨p, hp, rfl⟩ := hq
+              exact poolRow_holds base a pool hpool p.2 hbase
+                (fun s hs => hS s (List.mem_flatMap.mpr ⟨p, hp, hs⟩))
+            have h3 : ∀ t ∈ combineForm (comb.map (fun p => (p.1, poolRow pool p.2))),
+                IsIntVal t.coeff ∧ IsIntVal (a t.idx) :=
+              fun t ht => ⟨(hintg t ht).1, hint t.idx (hintg t ht).2⟩
+            generalize comb.map (fun p => (p.1, poolRow pool p.2)) = cc at h1 h2 h3 ⊢
+            exact rnd_sat cc a h1 h2 h3
         | uns i1 i2 j k =>
             obtain ⟨hj, hEq, hlo, hup⟩ := hr
             intro hbase hS
@@ -177,6 +222,10 @@ theorem flat_infeasible (base : List Le) (intVars : List Nat) (steps : List FRea
 def rvalidB (intVars : List Nat) (pool : Pool) : FReason → Bool
   | .asm _ => true
   | .lin comb => comb.all (fun p => decide (0 ≤ p.1))
+  | .rnd comb =>
+      comb.all (fun p => decide (0 ≤ p.1)) &&
+      (combineForm (comb.map (fun p => (p.1, poolRow pool p.2)))).all
+        (fun t => isIntValB t.coeff && decide (t.idx ∈ intVars))
   | .uns i1 i2 j k =>
       decide (j ∈ intVars) && (poolRow pool i1 == poolRow pool i2) &&
       decide (leLower j (k : ℚ) ∈ poolAsm pool i1) && decide (leUpper j (k : ℚ) ∈ poolAsm pool i2)
@@ -187,6 +236,12 @@ theorem rvalidB_valid (intVars : List Nat) (pool : Pool) (r : FReason)
   | asm r => trivial
   | lin comb =>
       intro p hp; exact of_decide_eq_true ((List.all_eq_true.mp h) p hp)
+  | rnd comb =>
+      simp only [rvalidB, Bool.and_eq_true] at h
+      refine ⟨fun p hp => of_decide_eq_true ((List.all_eq_true.mp h.1) p hp), fun t ht => ?_⟩
+      have ht2 := (List.all_eq_true.mp h.2) t ht
+      rw [Bool.and_eq_true] at ht2
+      exact ⟨isIntValB_sound ht2.1, of_decide_eq_true ht2.2⟩
   | uns i1 i2 j k =>
       simp only [rvalidB, Bool.and_eq_true, decide_eq_true_eq] at h
       exact ⟨h.1.1.1, eq_of_beq h.1.1.2, h.1.2, h.2⟩
