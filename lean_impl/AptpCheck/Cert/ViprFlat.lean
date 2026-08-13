@@ -171,4 +171,67 @@ theorem flat_infeasible (base : List Le) (intVars : List Nat) (steps : List FRea
   rw [Le.sat, hzero a] at hsat
   linarith
 
+/-! ## Runnable `Bool` checker -/
+
+/-- Decidable well-formedness of a step. -/
+def rvalidB (intVars : List Nat) (pool : Pool) : FReason → Bool
+  | .asm _ => true
+  | .lin comb => comb.all (fun p => decide (0 ≤ p.1))
+  | .uns i1 i2 j k =>
+      decide (j ∈ intVars) && (poolRow pool i1 == poolRow pool i2) &&
+      decide (leLower j (k : ℚ) ∈ poolAsm pool i1) && decide (leUpper j (k : ℚ) ∈ poolAsm pool i2)
+
+theorem rvalidB_valid (intVars : List Nat) (pool : Pool) (r : FReason)
+    (h : rvalidB intVars pool r = true) : rvalid intVars pool r := by
+  cases r with
+  | asm r => trivial
+  | lin comb =>
+      intro p hp; exact of_decide_eq_true ((List.all_eq_true.mp h) p hp)
+  | uns i1 i2 j k =>
+      simp only [rvalidB, Bool.and_eq_true, decide_eq_true_eq] at h
+      exact ⟨h.1.1.1, eq_of_beq h.1.1.2, h.1.2, h.2⟩
+
+def fvalidB (intVars : List Nat) (pool : Pool) : List FReason → Bool
+  | [] => true
+  | r :: rs => rvalidB intVars pool r && fvalidB intVars (pool ++ [entryOf pool r]) rs
+
+theorem fvalidB_valid (intVars : List Nat) :
+    ∀ (pool : Pool) (steps : List FReason),
+      fvalidB intVars pool steps = true → fvalid intVars pool steps := by
+  intro pool steps
+  induction steps generalizing pool with
+  | nil => intro _; trivial
+  | cons r rs ih =>
+      intro h
+      simp only [fvalidB, Bool.and_eq_true] at h
+      exact ⟨rvalidB_valid intVars pool r h.1, ih _ h.2⟩
+
+/-- Acceptance: the last derived row is a zero-form negative-constant absurdity with no
+open assumptions. -/
+def acceptB (pool : Pool) : Bool :=
+  match pool.getLast? with
+  | some e => e.2.isEmpty && formIsZero e.1.form && decide (e.1.rhs < 0)
+  | none => false
+
+/-- The runnable checker: a valid replay from the base rows ending in an accepted
+absurdity. -/
+def checkFlat (intVars : List Nat) (base : List Le) (steps : List FReason) : Bool :=
+  fvalidB intVars (initPool base) steps && acceptB (freplay (initPool base) steps)
+
+/-- **The runnable flat checker is sound.** If `checkFlat` accepts, no valuation with
+the integer-declared variables integral satisfies the base rows. -/
+theorem checkFlat_sound (intVars : List Nat) (base : List Le) (steps : List FReason)
+    (h : checkFlat intVars base steps = true) :
+    ∀ a, (∀ j ∈ intVars, IsIntVal (a j)) → (∀ c ∈ base, Le.sat c a) → False := by
+  simp only [checkFlat, Bool.and_eq_true] at h
+  obtain ⟨hval, hacc⟩ := h
+  have hv := fvalidB_valid intVars _ steps hval
+  rcases hgl : (freplay (initPool base) steps).getLast? with _ | e
+  · exact absurd hacc (by simp [acceptB, hgl])
+  · simp only [acceptB, hgl, Bool.and_eq_true, decide_eq_true_eq] at hacc
+    obtain ⟨⟨hemp, hfz⟩, hneg⟩ := hacc
+    have hasm : e.2 = [] := by cases hc : e.2 with | nil => rfl | cons a t => rw [hc] at hemp; simp at hemp
+    exact flat_infeasible base intVars steps hv e (List.mem_of_getLast? hgl) hasm
+      (fun a => formIsZero_sound e.1.form hfz a) hneg
+
 end AptpCheck.Cert

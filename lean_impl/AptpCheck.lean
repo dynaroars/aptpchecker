@@ -15,6 +15,7 @@ import AptpCheck.Model.Encoder
 import AptpCheck.Model.EncodingSound
 import AptpCheck.Model.NetworkMLP
 import AptpCheck.Cert.Vipr
+import AptpCheck.Cert.ViprFlat
 import AptpCheck.Ast.Vipr
 import AptpCheck.Ast.NetRoundtrip
 import AptpCheck.Ast.AptpRoundtrip
