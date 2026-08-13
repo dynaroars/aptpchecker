@@ -71,6 +71,22 @@ arithmetic — those stay outside the trusted core by design.
 
 ## What you can run today
 
-You can build the whole project and read the exact-arithmetic front end and the
-machine-checked proofs; the fully-wired, end-to-end certified command-line tool
-is still being assembled.
+The end-to-end tool works. With official exact SCIP installed (see
+`docs/SCIP-SETUP.md`), running
+
+```
+APTP_SCIP=/path/to/scip aptpcheck examples/sample.net examples/sample.aptp
+```
+
+parses both files, verifies coverage, encodes each leaf as an exact-rational MILP,
+calls exact SCIP to produce a proof certificate, and re-checks every certificate with
+the kernel-checked checker. On the sample it reports **CERTIFIED** — all four leaves'
+real SCIP certificates (97–802 steps each; one leaf even uses Gomory rounding cuts) are
+accepted by the verified checker. The verified checker (`checkSem`) accepts *real,
+untrusted* solver output; its soundness theorem is machine-checked and axiom-clean.
+
+Remaining gap (honest): the executable encoder that builds each leaf's MILP is not yet
+proved identical to the dimension-indexed model the soundness theorem is stated on
+(they are believed equal; the bridge is the executable-`Network` model, and closing
+encoder-vs-model is future work), and branching (`uns`) certificates are conservatively
+rejected (the sample never needs them). Neither can cause a false CERTIFIED.

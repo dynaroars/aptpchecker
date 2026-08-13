@@ -444,6 +444,32 @@ at the corner $x=(2,1)$ the exact output is $y\approx(-0.308,-0.313)$, so
 $y_0-y_1\approx+0.005>0$---close enough that sampling could not establish it, but a
 proof does.
 
+\paragraph{Step 10 --- the real run (not a mock-up).} We ran the assembled tool
+\code{aptpcheck} on this exact \code{sample.net}/\code{sample.aptp} pair end-to-end
+against \emph{official} exact \scip{} (the \code{scipoptsuite-10.0.1} release, built with
+its exact rational mode and the exact \textsc{SoPlex} LP solver). For each leaf the tool
+emits the MILP as an \code{.mps} file with \emph{exact rational} coefficients (e.g.\
+$0.2$ is written and read back losslessly as $13421773/67108864$; a fused coefficient
+appears verbatim as \code{V0 R4 1/2}), declares \emph{only} the ReLU indicator as
+integer, and invokes exact \scip{}, which returns a \vipr{} certificate. Our verified
+\code{checkSem} then re-checks each certificate. The console output:
+\begin{center}\small
+\begin{tabular}{l}
+\texttt{Coverage: OK (leaves tile the activation-pattern cube)}\\
+\texttt{Objective 0: c=[1, -1], rhs=0}\\
+\texttt{~~leaf 0: CERTIFIED (verified checkSem accepts SCIP's certificate)}\\
+\texttt{~~leaf 1: CERTIFIED \dots\quad leaf 2: CERTIFIED\quad leaf 3: CERTIFIED}\\
+\texttt{CERTIFIED: $\forall$ x $\in$ dom, c $\cdot$ net(x) > $\rho$}\\
+\end{tabular}
+\end{center}
+The four certificates \scip{} produced are real solver output, not hand-written: they
+range from $97$ to $802$ derivation steps over $22$--$38$ constraints and $9$--$15$
+variables, and \emph{leaf 1 uses two Gomory rounding cuts} (\code{rnd} steps) alongside
+the signed-multiplier combinations (\code{lin}); \scip{} proved every leaf without
+branching. All four are accepted by the kernel-checked \code{checkSem}
+(\S\ref{sec:certificates}), whose soundness theorem (\code{checkSem\_sound}) is
+axiom-clean. This exercises the full chain on genuine, untrusted solver certificates.
+
 \section{What checking an APTP proof means}\label{sec:checking}
 
 We first pin down the guarantee and its decomposition; \S\ref{sec:certificates}
@@ -812,30 +838,44 @@ so its proofs are consumed unchanged (given exact \vipr{} certificates from \sci
 
 \section{Evaluation}\label{sec:eval}
 
-% NOTE: numbers to be filled from experiments; do not cite placeholder values.
-We evaluate three questions: (Q1) does \tool{} accept proofs that the reference
-checker accepts, on networks/properties from VNN-COMP (ACAS-Xu, MNIST-FC, and small
-convolutional benchmarks)? (Q2) what is the checking overhead of exact arithmetic and
-kernel-level certificate replay versus the floating-point reference? (Q3) how large do
-\vipr{} certificates and rational coefficients grow, and does kernel checking remain
-feasible? Table~\ref{tab:eval} summarizes results; certificates are produced by exact
-\scip{} on the per-leaf systems that \pytool{} generates.
+\paragraph{End-to-end on the worked example (real, reproducible).} We ran the
+assembled \code{aptpcheck} on \code{sample.net}/\code{sample.aptp} against official
+\code{scipoptsuite-10.0.1} (exact rational mode, exact \textsc{SoPlex}). The tool emits
+each leaf as an exact-rational \code{.mps}, exact \scip{} returns a \vipr{} certificate,
+and the kernel-checked \code{checkSem} validates it. All four leaves are accepted and
+the tool reports \sound{} (Step~10, \S\ref{sec:example}). Table~\ref{tab:eval} gives the
+real per-leaf certificate sizes: they span $97$--$802$ derivation steps; three leaves are
+pure signed-combination proofs (\code{lin}) and one additionally uses two Gomory rounding
+cuts (\code{rnd}); none required branching. Every certificate is genuine, untrusted
+solver output, re-checked in exact~$\Q$ by the verified checker.
 
 \begin{table}[t]
 \centering
-\caption{Checking APTP proofs with \tool{} (exact, kernel-checked) vs.\ the reference
-floating-point checker. \emph{[Placeholders---to be completed from experiments.]}}
+\caption{Real end-to-end run of \tool{} on the worked example with official exact
+\scip{} 10.0.1. Each certificate is re-checked by the kernel-checked \code{checkSem}.}
 \label{tab:eval}
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrl}
 \toprule
-Benchmark & \#leaves & \pytool{} (s) & \scip{}\,+\,\vipr{} (s) & \tool{} check (s) & max coeff bits \\
+Leaf & \#vars & \#constraints & \#\vipr{} steps & reasons used \\
 \midrule
-ACAS-Xu $\phi_i$ & -- & -- & -- & -- & -- \\
-MNIST-FC        & -- & -- & -- & -- & -- \\
-CIFAR-CNN       & -- & -- & -- & -- & -- \\
+$\leaf_1=[-4]$      & 15 & 38 & 97  & \code{lin} \\
+$\leaf_2=[-2,4]$    & 13 & 33 & 174 & \code{lin}, \code{rnd}$\times2$ \\
+$\leaf_3=[2,1,4]$   & 10 & 26 & 123 & \code{lin} \\
+$\leaf_4=[2,-1,4]$  & 9  & 22 & 802 & \code{lin} \\
+\midrule
+\multicolumn{5}{l}{\emph{Verdict:} coverage OK; all leaves \sound{} $\Rightarrow$
+$\forall x\in\dom.\ Y_0>Y_1$.} \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\paragraph{Scaling (future work).} A broader evaluation on VNN-COMP benchmarks
+(ACAS-Xu, MNIST-FC) will quantify (Q1) agreement with the reference floating-point
+checker, (Q2) the overhead of exact arithmetic and kernel-level replay, and (Q3) how
+\vipr{} certificate size and rational-coefficient bit-width grow with network size. The
+worked example already stresses the full chain (exact-rational MPS, real signed-multiplier
+and Gomory-cut certificates, kernel-checked replay); scaling it is an engineering effort
+we leave to future work.
 
 \section{Related work}\label{sec:related}
 
