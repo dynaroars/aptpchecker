@@ -11,10 +11,17 @@ has exact SCIP prove each branch, and re-checks SCIP's certificate with a
 machine-checked checker. Every heavy step — the parsers, the encoder, the
 certificate checker, and the coverage argument — is machine-verified and
 axiom-clean, and crucially the encoder that runs is the same one that's proven.
-What is not (yet) done is bolting those proven parts together into a single Lean
-theorem of the literal form "the command printed CERTIFIED ⟹ the property holds";
-today the guarantee is the composition of the proven pieces plus trusted OS/file
-I/O.
+Those pieces are now bolted together into a **single theorem**, `certify_network_sound`:
+if coverage holds and every leaf's `leafCheck` passes, then the network satisfies the
+property on the whole input box. `leafCheck` is the per-leaf check the tool actually runs
+— the verified certificate checker **plus** a certificate↔encoding correspondence check
+(the certificate's constraints really are this leaf's encoded equations) plus an
+integer-variable check. So when the tool prints CERTIFIED it has computed exactly this
+theorem's hypothesis. What remains trusted: the OS/file I/O and process plumbing (reading
+the files, invoking SCIP, and `main` faithfully AND-ing the per-leaf checks); SCIP itself
+stays untrusted (re-checked); and the step that maps SCIP's renumbered certificate
+variables back to encoder ids is untrusted-but-harmless (a wrong map only causes a
+spurious rejection, never a false CERTIFIED).
 
 ## What's proven (in plain terms)
 
