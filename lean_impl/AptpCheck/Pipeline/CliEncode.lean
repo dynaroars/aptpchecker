@@ -1,4 +1,5 @@
 import AptpCheck.Model.NetworkMLP
+import AptpCheck.Model.EncodeFold
 import AptpCheck.Pipeline.Affine
 
 /-!
