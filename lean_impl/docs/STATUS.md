@@ -104,10 +104,11 @@ CLI feeds SCIP exactly these rows. The old uniform encoder and the separate unve
 encoder have both been deleted, so the earlier "encoder-vs-model" gap is closed: the
 equations SCIP sees are the equations the soundness theorem is about.
 
-Remaining (honest): branching (`uns`) certificates are conservatively rejected by the
-checker (the sample never needs them — the leaf-aware encoder keeps the MILP small enough
-that exact SCIP proves each leaf with cuts, no branching); adding `uns` would only let it
-accept more certificates, never a false one. A single end-to-end Lean theorem literally
-of the form "the CLI printed CERTIFIED ⟹ the property holds" is not assembled — the
-guarantee is the composition of the proven parts (verified parsers, verified encoder,
-verified certificate checker, coverage) plus the trusted OS/IO glue.
+The checker also handles **branching**: when SCIP does its own case-split on a 0/1
+variable inside a leaf (an `uns` step), the checker validates the split — the two
+discharged bounds must be complementary integer bounds, each branch's row must dominate
+the stated row — and its soundness is part of the same machine-checked proof. This is
+validated on a *real* branched certificate from official SCIP (an integer-infeasible
+knapsack SCIP solved with 3 branch-and-bound nodes; `examples/uns_knapsack.vipr`), which
+the checker accepts — and correctly rejects when the integrality declaration is removed
+or the certificate is truncated.
