@@ -164,4 +164,108 @@ def MLP.encFoldBinIds : {inD outD : ℕ} → MLP inD outD → ℕ → (Fin inD �
           (fun i => max (lbAff W b inLo inHi i) 0) (fun i => max (ubAff W b inLo inHi i) 0)
           L (gid0 + hidD)
 
+/-! ## The main induction: emitted rows are satisfied and the output block is exact
+
+This mirrors `MLP.encRows_sat_and_out` verbatim; the terminal-layer case and the recursive
+routing are identical (the `last` case of `encFold` equals that of `encRows`), and the only
+new work is the middle per-neuron flatMap, discharged by `foldNeuronRows_sat` in place of
+the `reluRows_sat`/`leafRows_sat` pair. -/
+
+/-- **Core induction (fold encoder).** If the input real values `xv` lie in `[inLo,inHi]`,
+the abstract valuation `a` agrees with the trace list from `inBase`, and the leaf is
+consistent, then `a` satisfies every fold row and the output block holds the true network
+output. -/
+lemma MLP.encFold_sat_and_out {inD outD : ℕ} (net : MLP inD outD) :
+    ∀ (inBase : ℕ) (inLo inHi : Fin inD → ℚ) (L : List Int) (gid0 : ℕ)
+      (xv : Fin inD → ℚ) (a : Valuation),
+      (∀ i, inLo i ≤ xv i ∧ xv i ≤ inHi i) →
+      net.Agree inBase xv a →
+      net.consistent gid0 xv L →
+      (∀ r ∈ net.encFold inBase inLo inHi L gid0, Le.sat r a)
+      ∧ (∀ k, a (net.outBase inBase + k.val) = net.eval xv k) := by
+  induction net with
+  | last W b =>
+      intro inBase inLo inHi L gid0 xv a _hb hag _hcon
+      refine ⟨?_, ?_⟩
+      · intro r hr
+        simp only [MLP.encFold, List.mem_flatMap, List.mem_finRange, true_and] at hr
+        obtain ⟨k, hr⟩ := hr
+        refine affEqRows_sat _ _ _ _ a ?_ r hr
+        rw [hag.lastOut k]
+        simp only [preAct]
+        have hs : (∑ j, W k j * a (inBase + j.val)) = (∑ j, W k j * xv j) :=
+          Finset.sum_congr rfl (fun j _ => by rw [hag.input j])
+        rw [hs]
+      · intro k
+        simp only [MLP.outBase, MLP.eval]
+        exact hag.lastOut k
+  | @cons inD hidD outD W b rest ih =>
+      intro inBase inLo inHi L gid0 xv a hb hag hcon
+      simp only [MLP.consistent] at hcon
+      have hpb : ∀ i : Fin hidD,
+          lbAff W b inLo inHi i ≤ preAct W b xv i ∧ preAct W b xv i ≤ ubAff W b inLo inHi i :=
+        fun i => affine_interval_sound (W i) xv inLo inHi (b i)
+          (fun j => (hb j).1) (fun j => (hb j).2)
+      have hb' : ∀ i : Fin hidD,
+          max (lbAff W b inLo inHi i) 0 ≤ postAct W b xv i ∧
+          postAct W b xv i ≤ max (ubAff W b inLo inHi i) 0 := by
+        refine fun i => ⟨?_, ?_⟩
+        · simp only [postAct]; exact max_le_max (hpb i).1 le_rfl
+        · simp only [postAct]; exact max_le_max (hpb i).2 le_rfl
+      obtain ⟨ih_rows, ih_out⟩ := ih (inBase + inD + hidD + hidD)
+        (fun i => max (lbAff W b inLo inHi i) 0) (fun i => max (ubAff W b inLo inHi i) 0)
+        L (gid0 + hidD) (postAct W b xv) a hb' hag.rest hcon.2
+      refine ⟨?_, ?_⟩
+      · intro r hr
+        simp only [MLP.encFold, List.mem_append, List.mem_flatMap, List.mem_finRange,
+          true_and] at hr
+        rcases hr with ((⟨i, hr⟩ | ⟨i, hr⟩) | hr)
+        · -- pre-activation affine equalities (identical to `encRows`)
+          refine affEqRows_sat _ _ _ _ a ?_ r hr
+          rw [hag.consPre i]
+          simp only [preAct]
+          have hs : (∑ j, W i j * a (inBase + j.val)) = (∑ j, W i j * xv j) :=
+            Finset.sum_congr rfl (fun j _ => by rw [hag.input j])
+          rw [hs]
+        · -- per-neuron fold rows (the only new case)
+          refine foldNeuronRows_sat (lbAff W b inLo inHi i) (ubAff W b inLo inHi i)
+            L (gid0 + i.val + 1) (inBase + inD + i.val)
+            (inBase + inD + hidD + hidD + i.val) (inBase + inD + hidD + i.val)
+            a ?_ ?_ ?_ ?_ ?_ ?_ r hr
+          · rw [hag.consPre i]; exact (hpb i).1
+          · rw [hag.consPre i]; exact (hpb i).2
+          · rw [hag.consPost i, hag.consPre i]; simp only [postAct]
+          · rw [hag.consBin i, hag.consPre i]; simp only [binAct]
+          · intro hmem; rw [hag.consPre i]; exact (hcon.1 i).1 hmem
+          · intro hmem; rw [hag.consPre i]; exact (hcon.1 i).2 hmem
+        · -- recursive rows
+          exact ih_rows r hr
+      · intro k
+        simp only [MLP.outBase, MLP.eval]
+        exact ih_out k
+
+/-! ## Top-level over-approximation for the fold encoder -/
+
+open AptpCheck.Pipeline in
+/-- **Encoding over-approximation for the leaf-aware encoder.** For any input `x` in the
+box whose true ReLU signs are consistent with the leaf `L`, the real trace valuation is a
+feasible point of every emitted fold row (box + affine equalities + per-neuron fold rows)
+and the objective evaluates to `c · net(x)`. Mirrors `encoding_overapprox_mlp`. -/
+theorem encFold_overapprox {inD outD : ℕ} (net : MLP inD outD)
+    (cc : Fin outD → ℚ) (rhs : ℚ) (lo hi : Fin inD → ℚ) (L : List Int)
+    (x : Fin inD → ℚ) (hx : ∀ j, lo j ≤ x j ∧ x j ≤ hi j)
+    (hcon : net.consistent 0 x L) :
+    ∃ a : Valuation,
+      (∀ r ∈ boxRows lo hi ++ net.encFold 0 lo hi L 0, Le.sat r a) ∧
+      (net.objRow 0 cc rhs).form.eval a = ∑ k, cc k * net.eval x k := by
+  obtain ⟨hrows, hout⟩ :=
+    net.encFold_sat_and_out 0 lo hi L 0 x (net.trace x) hx (net.agree_trace x) hcon
+  refine ⟨net.trace x, ?_, ?_⟩
+  · intro r hr
+    rcases List.mem_append.mp hr with hbox | henc
+    · exact net.boxRows_sat_trace lo hi x hx r hbox
+    · exact hrows r henc
+  · rw [net.objRow_eval 0 cc rhs (net.trace x)]
+    exact Finset.sum_congr rfl (fun k _ => by rw [hout k])
+
 end AptpCheck.Model
