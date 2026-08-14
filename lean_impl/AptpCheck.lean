@@ -25,3 +25,4 @@ import AptpCheck.Ast.AptpRoundtrip
 import AptpCheck.Pipeline.ViprCheck
 import AptpCheck.Pipeline.ViprFlatCheck
 import AptpCheck.Pipeline.CliEncode
+import AptpCheck.Pipeline.EndToEnd
