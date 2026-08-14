@@ -5,11 +5,16 @@
 This project rebuilds, in the Lean 4 proof language, a tool that double-checks
 proofs that a neural network satisfies a property. Instead of trusting an
 outside solver, it re-checks that solver's evidence using exact fraction
-arithmetic (no floating-point rounding). The hard mathematical guarantees are
-now machine-verified: if the checker says "certified," the property really does
-hold for every input in range. What is *not* yet finished is connecting that
-verified math to the fast, runnable version of the code, so the tool is not yet
-proven correct from input file all the way to final answer.
+arithmetic (no floating-point rounding). The tool runs end to end: it parses the
+network and proof, turns each branch into equations with a **verified** encoder,
+has exact SCIP prove each branch, and re-checks SCIP's certificate with a
+machine-checked checker. Every heavy step — the parsers, the encoder, the
+certificate checker, and the coverage argument — is machine-verified and
+axiom-clean, and crucially the encoder that runs is the same one that's proven.
+What is not (yet) done is bolting those proven parts together into a single Lean
+theorem of the literal form "the command printed CERTIFIED ⟹ the property holds";
+today the guarantee is the composition of the proven pieces plus trusted OS/file
+I/O.
 
 ## What's proven (in plain terms)
 
@@ -78,15 +83,24 @@ The end-to-end tool works. With official exact SCIP installed (see
 APTP_SCIP=/path/to/scip aptpcheck examples/sample.net examples/sample.aptp
 ```
 
-parses both files, verifies coverage, encodes each leaf as an exact-rational MILP,
-calls exact SCIP to produce a proof certificate, and re-checks every certificate with
-the kernel-checked checker. On the sample it reports **CERTIFIED** — all four leaves'
-real SCIP certificates (97–802 steps each; one leaf even uses Gomory rounding cuts) are
-accepted by the verified checker. The verified checker (`checkSem`) accepts *real,
-untrusted* solver output; its soundness theorem is machine-checked and axiom-clean.
+parses both files, verifies coverage, encodes each leaf as an exact-rational MILP with
+the **verified** leaf-aware encoder, calls exact SCIP to produce a proof certificate, and
+re-checks every certificate with the kernel-checked checker. On the sample it reports
+**CERTIFIED** — all four leaves' real SCIP certificates are accepted by the verified
+checker.
 
-Remaining gap (honest): the executable encoder that builds each leaf's MILP is not yet
-proved identical to the dimension-indexed model the soundness theorem is stated on
-(they are believed equal; the bridge is the executable-`Network` model, and closing
-encoder-vs-model is future work), and branching (`uns`) certificates are conservatively
-rejected (the sample never needs them). Neither can cause a false CERTIFIED.
+There is now **one** encoder, and it is the one that is both run and proven: `encFold`
+(leaf-aware — it folds sign-fixed neurons and only puts a big-M switch on genuinely
+unstable ones). Its soundness (`encFold_overapprox`, and `certified_sound_network_fold`
+which transports it onto the parsed network) is machine-checked and axiom-clean, and the
+CLI feeds SCIP exactly these rows. The old uniform encoder and the separate unverified
+encoder have both been deleted, so the earlier "encoder-vs-model" gap is closed: the
+equations SCIP sees are the equations the soundness theorem is about.
+
+Remaining (honest): branching (`uns`) certificates are conservatively rejected by the
+checker (the sample never needs them — the leaf-aware encoder keeps the MILP small enough
+that exact SCIP proves each leaf with cuts, no branching); adding `uns` would only let it
+accept more certificates, never a false one. A single end-to-end Lean theorem literally
+of the form "the CLI printed CERTIFIED ⟹ the property holds" is not assembled — the
+guarantee is the composition of the proven parts (verified parsers, verified encoder,
+verified certificate checker, coverage) plus the trusted OS/IO glue.
