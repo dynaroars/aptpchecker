@@ -15,6 +15,7 @@ import AptpCheck.Model.EncodingSound
 import AptpCheck.Model.EncodeFold
 import AptpCheck.Model.NetworkMLP
 import AptpCheck.Model.NetworkMLPFold
+import AptpCheck.Model.TrueSign
 import AptpCheck.Cert.Vipr
 import AptpCheck.Cert.ViprFlat
 import AptpCheck.Cert.ViprSem
