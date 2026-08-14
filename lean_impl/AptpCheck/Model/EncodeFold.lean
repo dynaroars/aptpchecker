@@ -316,4 +316,38 @@ theorem encFold_binIds_int {inD outD : ℕ} (net : MLP inD outD)
     ∀ id ∈ net.encFoldBinIds 0 lo hi L 0, IsIntVal (net.trace x id) :=
   net.encFoldBinIds_int_core 0 lo hi L 0 x (net.trace x) (net.agree_trace x)
 
+/-! ## Per-leaf refutation for the fold encoder -/
+
+open AptpCheck.Pipeline in
+/-- **Per-leaf refutation for the leaf-aware encoder.** A Farkas certificate refuting the
+fold rows together with the negated objective proves `c · net(x) > rhs` for every `x` in
+the box consistent with the leaf. Mirrors `certified_sound_mlp`; composes with
+`Pipeline.certified_sound_abstract` exactly as the uniform version does (the refutation is
+a pure `≤`-row Farkas step, so it needs no integrality — that is supplied separately by
+`encFold_binIds_int` for the MILP integer-variable set). -/
+theorem certified_sound_mlp_fold {inD outD : ℕ} (net : MLP inD outD)
+    (cc : Fin outD → ℚ) (rhs : ℚ) (lo hi : Fin inD → ℚ) (L : List Int)
+    (x : Fin inD → ℚ) (hx : ∀ j, lo j ≤ x j ∧ x j ≤ hi j)
+    (hcon : net.consistent 0 x L)
+    (comb : List (ℚ × Le))
+    (hsub : ∀ p ∈ comb,
+      p.2 ∈ (net.objRow 0 cc rhs :: (boxRows lo hi ++ net.encFold 0 lo hi L 0)))
+    (hnn : ∀ p ∈ comb, 0 ≤ p.1)
+    (hcancel : (comb.map (fun p => p.1 * p.2.form.eval (net.trace x))).sum = 0)
+    (hneg : (comb.map (fun p => p.1 * p.2.rhs)).sum < 0) :
+    rhs < ∑ k, cc k * net.eval x k := by
+  obtain ⟨hrows, hout⟩ :=
+    net.encFold_sat_and_out 0 lo hi L 0 x (net.trace x) hx (net.agree_trace x) hcon
+  have hall : ∀ r ∈ boxRows lo hi ++ net.encFold 0 lo hi L 0, Le.sat r (net.trace x) := by
+    intro r hr
+    rcases List.mem_append.mp hr with h | h
+    · exact net.boxRows_sat_trace lo hi x hx r h
+    · exact hrows r h
+  have h := refute_of_cert (boxRows lo hi ++ net.encFold 0 lo hi L 0) (net.objRow 0 cc rhs)
+    (net.trace x) comb hsub hnn hcancel hneg hall
+  rw [net.objRow_eval 0 cc rhs (net.trace x)] at h
+  rw [show (∑ k, cc k * (net.trace x) (net.outBase 0 + k.val)) = ∑ k, cc k * net.eval x k from
+    Finset.sum_congr rfl (fun k _ => by rw [hout k])] at h
+  exact h
+
 end AptpCheck.Model
