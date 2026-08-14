@@ -497,9 +497,14 @@ leaves unfixed. All four certificates are accepted by the kernel-checked checker
 (\S\ref{sec:certificates}), so the tool's verdict is precisely the hypothesis of
 \code{certify\_network\_sound}. On this network the leaf-aware encoding keeps each MILP
 small enough that exact \scip{} proves every leaf with signed combinations and Gomory
-cuts alone --- no branching --- which is why the checked certificates use only
-\code{lin} and \code{rnd}. This exercises the full chain on genuine, untrusted solver
-certificates.
+cuts alone --- no branching --- which is why these certificates use only \code{lin} and
+\code{rnd}. To exercise branching too, we ran exact \scip{} on the integer-infeasible
+knapsack $6x+10y+15z=23$ (bounded integers; LP-feasible), which it solved by
+branch-and-bound, emitting a $32$-step certificate that uses two assumptions
+(\code{asm}), a case-split (\code{uns}) and eight Gomory cuts (\code{rnd}) alongside
+signed combinations (\code{lin}). Our verified checker accepts it --- and correctly
+\emph{rejects} it if the integrality declarations are stripped. This exercises the full
+chain, branching included, on genuine untrusted solver certificates.
 
 \section{What checking an APTP proof means}\label{sec:checking}
 
@@ -723,10 +728,10 @@ of still-open assumptions, discharged exactly at its split). The replay invarian
 no open assumptions --- no valuation with the declared variables integral satisfies
 the \code{CON} rows, i.e.\ the MILP is infeasible. \code{checkSem\_sound} composes
 this with the VIPR parser. The checker is validated on \emph{real} certificates from
-official exact \scip{}~10.0.1 --- signed-multiplier and Gomory-cut proofs on the worked
-example's leaves --- and the case-split rule \code{uns} is proved sound and available;
-wiring \code{uns} into the sensed replay (so branched certificates are also accepted end
-to end) is in progress.
+official exact \scip{}~10.0.1: signed-multiplier and Gomory-cut proofs on the worked
+example's leaves, and a genuinely branched proof (\code{asm}/\code{uns}) on a knapsack
+instance --- each also correctly \emph{rejected} when the integrality declarations are
+dropped.
 
 \emph{Parser verification.} The `.net` reader is \textbf{fully verified}:
 \code{parseNet\_printNet} proves \code{parseNet (printNet r) = .ok (rawToNet r)} for
@@ -896,27 +901,32 @@ each leaf as an exact-rational \code{.mps} from the verified leaf-aware encoder,
 the certificate \emph{and} its correspondence to the leaf's encoding. All four leaves
 are accepted and the tool reports \sound{} (Step~10, \S\ref{sec:example}).
 Table~\ref{tab:eval} gives the real per-leaf data. The integer-variable column equals
-the number of neurons the leaf leaves unfixed --- the leaf-aware encoding at work. Two
-certificate families appear: signed combinations (\code{lin}) and Gomory rounding cuts
-(\code{rnd}); on this network \scip{} needs no branching. Every certificate is genuine,
-untrusted solver output, re-checked in exact~$\Q$ by the verified checker.
+the number of neurons the leaf leaves unfixed --- the leaf-aware encoding at work. Three
+certificate families appear: signed combinations (\code{lin}), Gomory rounding cuts
+(\code{rnd}), and --- in the branching stress test --- assumptions and a case-split
+(\code{asm}/\code{uns}). Every certificate is genuine, untrusted solver output, re-checked
+in exact~$\Q$ by the verified checker.
 
 \begin{table}[t]
 \centering
 \caption{Real end-to-end run of \tool{} on the worked example with official exact
 \scip{} 10.0.1 (per-leaf MILPs from the verified leaf-aware encoder; each certificate
-re-checked by the kernel-checked \code{leafCheck}).}
+re-checked by the kernel-checked \code{leafCheck}). Bottom: a branching stress test
+(exact \scip{} solves it by branch-and-bound; the certificate is accepted by \code{checkSem}).}
 \label{tab:eval}
 \begin{tabular}{lrrrrl}
 \toprule
-Leaf & \#vars & \#int & \#constraints & \#\vipr{} steps & reasons used \\
+Instance & \#vars & \#int & \#constraints & \#\vipr{} steps & reasons used \\
 \midrule
 $\leaf_1=[-4]$      & 16 & 3 & 38 & 97  & \code{lin} \\
 $\leaf_2=[-2,4]$    & 16 & 2 & 35 & 273 & \code{lin}, \code{rnd}$\times2$ \\
 $\leaf_3=[2,1,4]$   & 16 & 1 & 32 & 177 & \code{lin} \\
 $\leaf_4=[2,-1,4]$  & 16 & 1 & 32 & 983 & \code{lin}, \code{rnd}$\times1$ \\
 \midrule
-\multicolumn{6}{l}{\emph{Verdict:} coverage OK; all leaves \sound{}
+knapsack $6x{+}10y{+}15z{=}23$ & 3 & 3 & 8 & 32 &
+  \code{asm}$\times2$, \code{lin}$\times21$, \code{rnd}$\times8$, \code{uns}$\times1$ \\
+\midrule
+\multicolumn{6}{l}{\emph{Verdict (sample):} coverage OK; all leaves \sound{}
 $\Rightarrow \forall x\in\dom.\ Y_0>Y_1$ (\code{certify\_network\_sound}).} \\
 \bottomrule
 \end{tabular}
