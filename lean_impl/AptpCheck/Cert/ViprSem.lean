@@ -222,6 +222,97 @@ theorem rndCheck_sound {intVars stated cs} (h : rndCheck intVars stated cs = tru
     have hr := rnd_ge (scomb cs).form (scomb cs).rhs a hInt hge
     rw [← hfe]; linarith [hrest.2]
 
+/-! ## Domination and complementary integer bounds (for `uns` case-splits) -/
+
+/-- An absurdity (identically-zero form, rhs contradicting the sense). -/
+def absurdB (c : SLe) : Bool :=
+  formIsZero c.form &&
+  (if c.sense = 'L' then decide (c.rhs < 0)
+   else if c.sense = 'G' then decide (0 < c.rhs)
+   else if c.sense = 'E' then decide (c.rhs ≠ 0)
+   else false)
+
+theorem absurd_unsat {c : SLe} (h : absurdB c = true) (a : Valuation) : ¬ c.sat a := by
+  simp only [absurdB, Bool.and_eq_true] at h
+  obtain ⟨hz, hcase⟩ := h
+  have hze := formIsZero_sound _ hz a
+  simp only [SLe.sat]
+  split_ifs at hcase ⊢ with hL hG hE
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
+  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact fun hh => hcase hh.symm
+
+
+/-- `c` dominates `d`: either `c` is an absurdity (which, per the VIPR spec, dominates
+any constraint), or the forms are equal as functions and the right-hand side is at least
+as strong for `d`'s sense (an `=`-row dominates either inequality direction). -/
+def domSLe (c d : SLe) : Bool :=
+  absurdB c ||
+  (formEq c.form d.form &&
+   (if d.sense = 'L' then ((c.sense == 'L') || (c.sense == 'E')) && decide (c.rhs ≤ d.rhs)
+    else if d.sense = 'G' then ((c.sense == 'G') || (c.sense == 'E')) && decide (d.rhs ≤ c.rhs)
+    else if d.sense = 'E' then (c.sense == 'E') && decide (c.rhs = d.rhs)
+    else false))
+
+theorem domSLe_sat {c d : SLe} (h : domSLe c d = true) {a : Valuation}
+    (hc : c.sat a) : d.sat a := by
+  simp only [domSLe, Bool.or_eq_true, Bool.and_eq_true] at h
+  rcases h with habs | ⟨hform, hrest⟩
+  · exact absurd hc (absurd_unsat habs a)
+  have hfe := formEq_sound hform a
+  simp only [SLe.sat] at hc ⊢
+  split_ifs at hrest ⊢ with hdL hdG hdE
+  · rw [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, beq_iff_eq, decide_eq_true_eq] at hrest
+    obtain ⟨hcs, hle⟩ := hrest
+    rcases hcs with hcs | hcs <;> simp [hcs] at hc <;> linarith
+  · rw [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, beq_iff_eq, decide_eq_true_eq] at hrest
+    obtain ⟨hcs, hle⟩ := hrest
+    rcases hcs with hcs | hcs <;> simp [hcs] at hc <;> linarith
+  · rw [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hrest
+    obtain ⟨hcs, heq⟩ := hrest
+    simp [hcs] at hc
+    rw [← hfe, hc, heq]
+
+/-- `b1`,`b2` are complementary integer bounds `f ≤ β` / `f ≥ β+1` (in either order):
+same form as functions, integer-valued form over `intVars`, integer `β`. -/
+def unsBoundsB (intVars : List Nat) (b1 b2 : SLe) : Bool :=
+  ((b1.sense == 'L') && (b2.sense == 'G') && formEq b1.form b2.form
+    && formIntB intVars b1.form && isIntValB b1.rhs && decide (b2.rhs = b1.rhs + 1))
+  ||
+  ((b1.sense == 'G') && (b2.sense == 'L') && formEq b1.form b2.form
+    && formIntB intVars b2.form && isIntValB b2.rhs && decide (b1.rhs = b2.rhs + 1))
+
+/-- **Exhaustiveness of the integer split.** At any valuation with the integer variables
+integral, one of the two complementary bounds holds. -/
+theorem unsBounds_split {intVars : List Nat} {b1 b2 : SLe}
+    (h : unsBoundsB intVars b1 b2 = true) {a : Valuation}
+    (hint : ∀ j ∈ intVars, IsIntVal (a j)) : b1.sat a ∨ b2.sat a := by
+  simp only [unsBoundsB, Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq,
+    decide_eq_true_eq] at h
+  rcases h with ⟨⟨⟨⟨⟨h1, h2⟩, hfe⟩, hfi⟩, hb⟩, hb2⟩ | ⟨⟨⟨⟨⟨h1, h2⟩, hfe⟩, hfi⟩, hb⟩, hb2⟩
+  · obtain ⟨m, hm⟩ := formIntB_sound hfi a hint
+    obtain ⟨n, hn⟩ := isIntValB_sound hb
+    have hfe' := formEq_sound hfe a
+    simp only [SLe.sat, h1, h2]
+    norm_num
+    by_cases hmn : m ≤ n
+    · left; rw [hm, hn]; exact_mod_cast hmn
+    · right; rw [hb2, hn, ← hfe', hm]
+      have : n + 1 ≤ m := by omega
+      push_cast
+      exact_mod_cast this
+  · obtain ⟨m, hm⟩ := formIntB_sound hfi a hint
+    obtain ⟨n, hn⟩ := isIntValB_sound hb
+    have hfe' := formEq_sound hfe a
+    simp only [SLe.sat, h1, h2]
+    norm_num
+    by_cases hmn : m ≤ n
+    · right; rw [hm, hn]; exact_mod_cast hmn
+    · left; rw [hb2, hn, hfe', hm]
+      have : n + 1 ≤ m := by omega
+      push_cast
+      exact_mod_cast this
+
 /-! ## Derivation replay over sensed constraints -/
 
 /-- A derivation step: the stated (sensed) row, and its reason (indices reference the
@@ -243,21 +334,28 @@ def spoolAsm (pool : SPool) (i : Nat) : List SLe := (pool.getD i sdflt).2
 def resolve (pool : SPool) (comb : List (ℚ × Nat)) : List (ℚ × SLe) :=
   comb.map (fun p => (p.1, spoolRow pool p.2))
 
-/-- The pool entry a step produces (`uns` handled later; rejected for now). -/
+/-- The pool entry a step produces. An `uns` (case-split) entry keeps the stated row and
+discharges the two branch bounds: its open assumptions are branch `i1`'s minus bound
+`l1`, plus branch `i2`'s minus bound `l2`. -/
 def sentryOf (pool : SPool) (s : SStep) : SLe × List SLe :=
   match s.reason with
   | .asm => (s.stated, [s.stated])
   | .lin comb => (s.stated, comb.flatMap (fun p => spoolAsm pool p.2))
   | .rnd comb => (s.stated, comb.flatMap (fun p => spoolAsm pool p.2))
-  | .uns _ _ _ _ => (s.stated, [])
+  | .uns i1 l1 i2 l2 =>
+      (s.stated, ((spoolAsm pool i1).filter (fun t => !(t == spoolRow pool l1)))
+              ++ ((spoolAsm pool i2).filter (fun t => !(t == spoolRow pool l2))))
 
-/-- Decidable step validity. -/
+/-- Decidable step validity. `uns`: both branch rows dominate the stated row, and the
+two discharged bounds are complementary integer bounds. -/
 def svalidB (intVars : List Nat) (pool : SPool) (s : SStep) : Bool :=
   match s.reason with
   | .asm => true
   | .lin comb => linCheck s.stated (resolve pool comb)
   | .rnd comb => rndCheck intVars s.stated (resolve pool comb)
-  | .uns _ _ _ _ => false
+  | .uns i1 l1 i2 l2 =>
+      domSLe (spoolRow pool i1) s.stated && domSLe (spoolRow pool i2) s.stated
+      && unsBoundsB intVars (spoolRow pool l1) (spoolRow pool l2)
 
 /-- `e` holds at `a`: given base rows and `e`'s open assumptions, `e`'s row holds. -/
 def sentryHolds (base : List SLe) (a : Valuation) (e : SLe × List SLe) : Prop :=
@@ -330,27 +428,29 @@ theorem sfreplay_holds (base : List SLe) (intVars : List Nat) (a : Valuation)
             exact spoolRow_holds base a pool hpool q.2 hbase
               (fun t ht => hS t (List.mem_flatMap.mpr ⟨q, hq, ht⟩))
         | uns i1 l1 i2 l2 =>
-            simp [svalidB, hr] at hstep
+            have hval : (domSLe (spoolRow pool i1) s.stated
+                && domSLe (spoolRow pool i2) s.stated
+                && unsBoundsB intVars (spoolRow pool l1) (spoolRow pool l2)) = true := by
+              simp only [svalidB, hr] at hstep; exact hstep
+            rw [Bool.and_eq_true, Bool.and_eq_true] at hval
+            obtain ⟨⟨hdom1, hdom2⟩, hbnd⟩ := hval
+            simp only [sentryOf, hr]
+            intro hbase hS
+            rcases unsBounds_split hbnd hint with hb1 | hb2
+            · refine domSLe_sat hdom1 ?_
+              refine spoolRow_holds base a pool hpool i1 hbase (fun t ht => ?_)
+              by_cases hteq : t = spoolRow pool l1
+              · rw [hteq]; exact hb1
+              · exact hS t (List.mem_append_left _
+                  (List.mem_filter.mpr ⟨ht, by simp [hteq]⟩))
+            · refine domSLe_sat hdom2 ?_
+              refine spoolRow_holds base a pool hpool i2 hbase (fun t ht => ?_)
+              by_cases hteq : t = spoolRow pool l2
+              · rw [hteq]; exact hb2
+              · exact hS t (List.mem_append_right _
+                  (List.mem_filter.mpr ⟨ht, by simp [hteq]⟩))
 
 /-! ## Acceptance -/
-
-/-- An absurdity (identically-zero form, rhs contradicting the sense). -/
-def absurdB (c : SLe) : Bool :=
-  formIsZero c.form &&
-  (if c.sense = 'L' then decide (c.rhs < 0)
-   else if c.sense = 'G' then decide (0 < c.rhs)
-   else if c.sense = 'E' then decide (c.rhs ≠ 0)
-   else false)
-
-theorem absurd_unsat {c : SLe} (h : absurdB c = true) (a : Valuation) : ¬ c.sat a := by
-  simp only [absurdB, Bool.and_eq_true] at h
-  obtain ⟨hz, hcase⟩ := h
-  have hze := formIsZero_sound _ hz a
-  simp only [SLe.sat]
-  split_ifs at hcase ⊢ with hL hG hE
-  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
-  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact not_le.mpr hcase
-  · rw [hze]; rw [decide_eq_true_eq] at hcase; exact fun hh => hcase hh.symm
 
 /-- Initial pool from the base (CON) rows, each with no assumptions. -/
 def sinitPool (base : List SLe) : SPool := base.map (fun c => (c, ([] : List SLe)))
