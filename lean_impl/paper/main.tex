@@ -369,21 +369,31 @@ states are handled inside each leaf.
 Take leaf $\leaf_3=[2,1,4]$: neurons $N_2,N_1,N_4$ are ``on'' (their values are
 $\ge0$), while $N_3$ is unbranched (could be on or off). The encoder writes
 inequalities that any real network execution in this leaf \emph{must} satisfy:
+The encoder is \emph{leaf-aware}: a neuron the leaf pins ``on'' needs no $0/1$ helper
+at all --- its output simply \emph{is} its input. Variables are laid out in fixed
+slots (inputs $v_0,v_1$; layer-1 pre-activations $v_2,v_3$, helpers $v_4,v_5$, outputs
+$v_6,v_7$; layer-2 pre-activations $v_8,v_9$, helper $v_{10}$, outputs $v_{12},v_{13}$;
+network outputs $v_{14},v_{15}$):
 \begin{itemize}
 \item \textbf{Box:} the inputs are in range ($v_0\le2$, $-v_0\le2$, $v_1\le1$, $-v_1\le1$).
-\item \textbf{Affine equalities:} each layer's output equals the linear function of its
+\item \textbf{Affine equalities:} each pre-activation equals the linear function of its
       input, e.g.\ $v_2=-0.5v_0+0.2v_1-0.5$.
-\item \textbf{ReLU encoding for the unbranched $N_3$:} four inequalities using a $0/1$
-      helper variable $v_7$ to say ``$v_6=\max(v_4,0)$''; these use the range from
+\item \textbf{Folded ReLUs for the pinned $N_1,N_2,N_4$:} just $v_6=v_2$, $v_7=v_3$,
+      $v_{13}=v_9$ (``output $=$ input'') --- no helper, no integer variable.
+\item \textbf{Big-$M$ ReLU for the unbranched $N_3$ only:} four inequalities using the
+      one $0/1$ helper $v_{10}$ to say ``$v_{12}=\max(v_8,0)$'', with the range from
       Step~4 ($[-0.43,0.86]$) as the ``big-$M$'' constants.
 \item \textbf{Sign constraints:} the leaf says $N_1,N_2,N_4\ge0$, so $v_2\ge0$,
-      $v_3\ge0$, $v_5\ge0$.
-\item \textbf{Negated property:} the objective $v_8-v_9\le\rho$ (the opposite of what
-      we want to prove).
+      $v_3\ge0$, $v_9\ge0$.
+\item \textbf{Negated property:} the objective $v_{14}-v_{15}\le\rho$ (the opposite of
+      what we want to prove).
 \end{itemize}
-In total: 23 rows + the objective row, over 15 variables.
+In total: 31 rows + the objective row over 16 variable slots, with a \emph{single}
+integer variable ($v_{10}$) --- because three of the four neurons are pinned by the
+leaf. (Across the four leaves the integer count is $3,2,1,1$: exactly the unfixed
+neurons of each.)
 
-\emph{What we proved (\code{encoding\_overapprox\_mlp}).} If you plug in the
+\emph{What we proved (\code{encFold\_overapprox}).} If you plug in the
 \emph{true} network values (the actual $x$, the true pre/post values of each neuron,
 the true output), then \emph{every single row above is satisfied}, and the objective
 form evaluates to $c\cdot\net(x)$. This is proved by induction over the layers: each
@@ -438,6 +448,20 @@ $\forall x\in\dom,\ c\cdot\net(x)>\rho$ (Theorem~\ref{thm:main}). Finally, Step~
 shows this applies to the actual parsed network (not just a separate mathematical
 copy), because the two compute the same thing.
 
+This whole chain is one machine-checked theorem, \code{certify\_network\_sound}: if the
+per-leaf check \code{leafCheck} passes for every leaf and the coverage check passes, then
+$\forall x\in\dom,\ c\cdot\net(x)>\rho$ on the \emph{parsed} network. \code{leafCheck}
+bundles three decidable conditions: (i) the verified certificate checker accepts
+(\code{checkSem}); (ii) \emph{certificate--encoding correspondence}: every constraint row
+in the certificate's \code{CON} section semantically matches a row of this leaf's
+encoding (Step~7's rows, plus the binaries' $0\le b\le1$ bounds) --- ``semantically''
+because the solver renumbers variables (undone, untrusted, from the certificate's own
+variable names --- a wrong renaming can only cause rejection) and reorders terms (handled
+by the proven order-insensitive form equality); and (iii) every variable the certificate
+declares integer is one of the encoder's ReLU indicators. Without (ii) the certificate
+would prove infeasibility of \emph{its own} rows, not necessarily \emph{ours}; with it,
+the guarantee attaches to the network.
+
 \paragraph{Verdict.} $\sound\iff$ coverage $\wedge$ every leaf refuted; composing
 (Theorem~\ref{thm:main}) gives $Y_0>Y_1$ on all of $\dom$. The property is tight:
 at the corner $x=(2,1)$ the exact output is $y\approx(-0.308,-0.313)$, so
@@ -450,25 +474,32 @@ against \emph{official} exact \scip{} (the \code{scipoptsuite-10.0.1} release, b
 its exact rational mode and the exact \textsc{SoPlex} LP solver). For each leaf the tool
 emits the MILP as an \code{.mps} file with \emph{exact rational} coefficients (e.g.\
 $0.2$ is written and read back losslessly as $13421773/67108864$; a fused coefficient
-appears verbatim as \code{V0 R4 1/2}), declares \emph{only} the ReLU indicator as
-integer, and invokes exact \scip{}, which returns a \vipr{} certificate. Our verified
-\code{checkSem} then re-checks each certificate. The console output:
+appears verbatim as \code{V0 R4 1/2}), declares \emph{only} the unfixed neurons' ReLU
+indicators as integer, and invokes exact \scip{}, which returns a \vipr{} certificate.
+The verified \code{leafCheck} (Step~9) then validates each certificate \emph{and} its
+correspondence to the leaf's encoding. The console output:
 \begin{center}\small
 \begin{tabular}{l}
 \texttt{Coverage: OK (leaves tile the activation-pattern cube)}\\
 \texttt{Objective 0: c=[1, -1], rhs=0}\\
-\texttt{~~leaf 0: CERTIFIED (verified checkSem accepts SCIP's certificate)}\\
+\texttt{~~leaf 0: CERTIFIED (verified leafCheck: cert validated + matches this leaf's encoding)}\\
 \texttt{~~leaf 1: CERTIFIED \dots\quad leaf 2: CERTIFIED\quad leaf 3: CERTIFIED}\\
 \texttt{CERTIFIED: $\forall$ x $\in$ dom, c $\cdot$ net(x) > $\rho$}\\
 \end{tabular}
 \end{center}
-The four certificates \scip{} produced are real solver output, not hand-written: they
-range from $97$ to $802$ derivation steps over $22$--$38$ constraints and $9$--$15$
-variables, and \emph{leaf 1 uses two Gomory rounding cuts} (\code{rnd} steps) alongside
-the signed-multiplier combinations (\code{lin}); \scip{} proved every leaf without
-branching. All four are accepted by the kernel-checked \code{checkSem}
-(\S\ref{sec:certificates}), whose soundness theorem (\code{checkSem\_sound}) is
-axiom-clean. This exercises the full chain on genuine, untrusted solver certificates.
+The four certificates \scip{} produced are real solver output, not hand-written: over
+$32$--$38$ constraints and $16$ variables per leaf they run $97$, $273$, $177$ and $983$
+derivation steps respectively; two leaves additionally use Gomory rounding cuts
+(\code{rnd} steps) alongside the signed-multiplier combinations (\code{lin}). The
+leaf-aware encoding is directly visible in the integer-variable counts: leaves
+$\leaf_1,\dots,\leaf_4$ declare $3,2,1,1$ integers --- exactly the neurons each leaf
+leaves unfixed. All four certificates are accepted by the kernel-checked checker
+(\S\ref{sec:certificates}), so the tool's verdict is precisely the hypothesis of
+\code{certify\_network\_sound}. On this network the leaf-aware encoding keeps each MILP
+small enough that exact \scip{} proves every leaf with signed combinations and Gomory
+cuts alone --- no branching --- which is why the checked certificates use only
+\code{lin} and \code{rnd}. This exercises the full chain on genuine, untrusted solver
+certificates.
 
 \section{What checking an APTP proof means}\label{sec:checking}
 
@@ -658,40 +689,44 @@ Python parser's output on the sample proofs.
 
 \emph{Encoding soundness} (Lemma~\ref{lem:enc}) is proved for the full
 \textbf{arbitrary-depth MLP} class $\mathrm{Lin}\!\to\!\relu\!\to\!\cdots\!\to\!\mathrm{Lin}$
-(a \code{Linear}, then any number of $(\relu,\mathrm{Linear})$ blocks) with the
-\emph{full} big-$M$ encoding. By induction on depth, \code{encoding\_overapprox\_mlp}
-builds the real trace and shows it satisfies every emitted row (box, every affine
-layer, the four big-$M$ rows per neuron, and the leaf's sign rows) with the objective
-evaluating to $c\cdot\net(x)$; \code{certified\_sound\_mlp} composes it with
-\code{refute\_of\_cert} for per-leaf refutation, and
-\code{certified\_sound\_mlp\_satLeaf} restates the hypothesis through the coverage
-\code{satLeaf} interface so it slots directly into \code{certified\_sound\_abstract}
-(Fig.~\ref{fig:thm}). The affine and one-hidden-layer cases
-(\code{certified\_sound\_singleLinear}, \code{\_oneHidden}) are retained as instances.
-All axiom-clean. (The soundness statement is on a dimension-indexed \code{MLP} normal
-form ending in a linear scoring layer; \code{Flatten} is the identity and elided,
-consecutive linears/ReLUs collapse, and \emph{Conv/CNN is out of scope}, left as future
-work.)
+(a \code{Linear}, then any number of $(\relu,\mathrm{Linear})$ blocks), for the
+\textbf{leaf-aware} encoder \code{MLP.encFold} the tool actually runs: a neuron the
+leaf sign-fixes (or the intervals stabilize) is folded to $\mathrm{post}=\mathrm{pre}$
+or $\mathrm{post}=0$ with \emph{no} integer variable, and only genuinely-unstable
+neurons get the four big-$M$ rows and a binary. By induction on depth,
+\code{encFold\_overapprox} builds the real trace and shows it satisfies every emitted
+row (box, every affine layer, the per-neuron fold or big-$M$ rows, and the leaf's sign
+rows) with the objective evaluating to $c\cdot\net(x)$; \code{encFold\_binIds\_int}
+shows the trace is $\{0,1\}$-valued on the (only) declared integer variables;
+\code{certified\_sound\_mlp\_fold} composes with \code{refute\_of\_cert} for per-leaf
+refutation, and the \code{satLeaf}-phrased variant slots directly into
+\code{certified\_sound\_abstract} (Fig.~\ref{fig:thm}). There is exactly \emph{one}
+encoder, and it is the one both run and proven. All axiom-clean. (The soundness
+statement is on a dimension-indexed \code{MLP} normal form ending in a linear scoring
+layer; \code{Flatten} is the identity and elided, consecutive linears/ReLUs collapse,
+and \emph{Conv/CNN is out of scope}, left as future work.)
 
-\emph{Certificate replay} is mechanized as a complete, automatic, runnable
-proof-by-cases checker. The three step rules are proved axiom-clean---\code{lin\_sound}
-(a nonnegative combination of $\le$-rows is implied, generalizing
-Lemma~\ref{lem:farkas}), \code{rnd\_sound} (integer rounding under integrality), and
-\code{uns\_sound} (discharge of an integer split $x_i\le k \lor x_i\ge k{+}1$). On top,
-a refutation is modelled as a tree (\code{RefTree}: Farkas leaf, integer split, and a
-round/derive node), whose validity (\code{refTree\_sound}) proves no valuation with the
-declared variables integral satisfies the rows---i.e. the MILP is infeasible; the tree
-structure carries the case-split assumptions. A \code{Bool} checker
-\code{checkRefTree} (with computable identical-cancellation, \code{formIsZero}) is
-proved to imply that soundness (\code{checkRefTree\_sound}) and \emph{runs} (verified
-returning \code{true} on the integer-infeasible $2x\ge1\wedge 2x\le1$, which genuinely
-needs a case-split). This handles \code{lin}+\code{rnd}+\code{uns}, and \code{lin}+
-\code{uns} alone is already complete for MILP infeasibility. Finally
-\code{vipr\_infeasible} composes it with the VIPR~v1.0 parser: a tree validated against
-a parsed certificate's \code{CON} rows proves that system infeasible (demonstrated end
-to end on a hand-written \code{.vipr}). The tree is produced by an \emph{untrusted}
-step (SCIP's search / a flat-to-tree converter); \code{checkRefTree} re-validates it,
-so it stays out of the trusted base.
+\emph{Certificate replay} is mechanized as a complete, automatic, runnable checker
+\code{checkSem} over the certificate's own \emph{sensed} constraints
+($\le$/$\ge$/$=$), implementing full VIPR~v1.0 verification semantics and consuming
+the solver's flat, index-referenced derivation list \emph{directly} --- no
+tree-reshaping step exists. Its ingredients are proved axiom-clean: the
+\emph{suitable linear combination} (signed multipliers over mixed senses, per-term
+monotonicity generalizing Lemma~\ref{lem:farkas}), constraint \emph{domination}
+including the spec's absurdity-dominates-anything rule, \code{rnd} (integer rounding
+of the combined row, both directions), and \code{uns} (an integer case-split: the two
+discharged rows must be complementary integer bounds $f\le\beta\,/\,f\ge\beta{+}1$,
+each branch's row must dominate the stated row, and each derived row carries the set
+of still-open assumptions, discharged exactly at its split). The replay invariant
+(\code{sfreplay\_holds}: every derived row holds under its open assumptions) gives
+\code{checkSemCore\_sound}: if the checker accepts --- the final row an absurdity with
+no open assumptions --- no valuation with the declared variables integral satisfies
+the \code{CON} rows, i.e.\ the MILP is infeasible. \code{checkSem\_sound} composes
+this with the VIPR parser. The checker is validated on \emph{real} certificates from
+official exact \scip{}~10.0.1 --- signed-multiplier and Gomory-cut proofs on the worked
+example's leaves --- and the case-split rule \code{uns} is proved sound and available;
+wiring \code{uns} into the sensed replay (so branched certificates are also accepted end
+to end) is in progress.
 
 \emph{Parser verification.} The `.net` reader is \textbf{fully verified}:
 \code{parseNet\_printNet} proves \code{parseNet (printNet r) = .ok (rawToNet r)} for
@@ -712,13 +747,26 @@ S-expression parser and rewriting the two-pass \code{parseAptp} loops as total
 The soundness is also bridged to the \emph{executable} side: \code{toMLP} converts a
 parsed \code{Array}-based \code{Network} (the MLP normal form) to the
 dimension-indexed \code{MLP}, \code{toMLP\_eval} proves \code{Network.eval} agrees with
-\code{MLP.eval}, and \code{certified\_sound\_network} transports the per-leaf
+\code{MLP.eval}, and \code{certified\_sound\_network\_fold} transports the per-leaf
 refutation onto the parsed network's own output---so the runnable network is exactly
 the one the theorem is about (all axiom-clean).
 
-Remaining, and none requiring trust in \scip{} or floats: Conv/CNN encoding; and the
-executable CLI wiring into Fig.~\ref{fig:thm} (including the untrusted
-flat-VIPR-to-tree converter).
+\emph{End-to-end capstone.} The pieces compose into one theorem,
+\code{certify\_network\_sound}: if the coverage check passes and every leaf's
+\code{leafCheck} passes --- \code{checkSem} accepts the certificate, every certificate
+\code{CON} row semantically matches a row of that leaf's \code{encFold} encoding (or a
+binary's $[0,1]$ bound), and the declared integer variables are the encoder's binaries
+--- then $\forall x\in\dom,\ c\cdot\net(x)>\rho$ on the parsed network. The
+correspondence is checked up to the solver's variable renumbering (undone, untrusted,
+from the certificate's own variable names) and term reordering (the proven
+order-insensitive form equality); the true-sign vector \code{MLP.trueSign} with
+\code{signMatch\_trueSign} supplies the coverage side. The CLI computes exactly this
+hypothesis, so its \sound{} verdict carries the theorem's conclusion; trusted beyond
+Lean's kernel are only the OS/file-I/O glue and \code{main}'s conjunction of the
+per-leaf verdicts.
+
+Remaining, and none requiring trust in \scip{} or floats: Conv/CNN encoding (future
+work).
 
 \paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
 arithmetic, and the \code{.net} file faithfully representing the intended network (its
@@ -830,41 +878,46 @@ encoding-soundness proof (\code{Model/EncodingSound}); the Farkas checks
 runnable \code{checkRefTree}); the \code{Network}$\to$\code{MLP} bridge transporting soundness onto the executable
 network (\code{Model/NetworkMLP}); and the composition scaffolding plus the VIPR
 endpoint (\code{Pipeline/Compose}, \code{Pipeline/Affine}, \code{Pipeline/ViprCheck}).
-Under construction: Conv/CNN, and the command-line driver
-\code{aptpcheck -{}-net N.net -{}-aptp P.aptp -{}-vipr-dir D/} that composes the pieces
-into Theorem~\ref{thm:main} (\code{Pipeline/*}) and runs the untrusted
-flat-\vipr{}-to-tree conversion. The proof format and neuron numbering match \pytool,
-so its proofs are consumed unchanged (given exact \vipr{} certificates from \scip).
+The command-line driver \code{aptpcheck N.net P.aptp [-{}-vipr-dir D/]} is assembled and
+runs end to end: it invokes exact \scip{} per leaf and validates each returned
+certificate with the verified \code{leafCheck}, so its \sound{} verdict is the
+hypothesis of \code{certify\_network\_sound} (\code{Pipeline/EndToEnd}); there is no
+flat-to-tree conversion --- the checker consumes the solver's derivation list directly.
+Under construction: Conv/CNN. The proof format and neuron numbering match \pytool, so
+its proofs are consumed unchanged.
 
 \section{Evaluation}\label{sec:eval}
 
 \paragraph{End-to-end on the worked example (real, reproducible).} We ran the
 assembled \code{aptpcheck} on \code{sample.net}/\code{sample.aptp} against official
 \code{scipoptsuite-10.0.1} (exact rational mode, exact \textsc{SoPlex}). The tool emits
-each leaf as an exact-rational \code{.mps}, exact \scip{} returns a \vipr{} certificate,
-and the kernel-checked \code{checkSem} validates it. All four leaves are accepted and
-the tool reports \sound{} (Step~10, \S\ref{sec:example}). Table~\ref{tab:eval} gives the
-real per-leaf certificate sizes: they span $97$--$802$ derivation steps; three leaves are
-pure signed-combination proofs (\code{lin}) and one additionally uses two Gomory rounding
-cuts (\code{rnd}); none required branching. Every certificate is genuine, untrusted
-solver output, re-checked in exact~$\Q$ by the verified checker.
+each leaf as an exact-rational \code{.mps} from the verified leaf-aware encoder, exact
+\scip{} returns a \vipr{} certificate, and the kernel-checked \code{leafCheck} validates
+the certificate \emph{and} its correspondence to the leaf's encoding. All four leaves
+are accepted and the tool reports \sound{} (Step~10, \S\ref{sec:example}).
+Table~\ref{tab:eval} gives the real per-leaf data. The integer-variable column equals
+the number of neurons the leaf leaves unfixed --- the leaf-aware encoding at work. Two
+certificate families appear: signed combinations (\code{lin}) and Gomory rounding cuts
+(\code{rnd}); on this network \scip{} needs no branching. Every certificate is genuine,
+untrusted solver output, re-checked in exact~$\Q$ by the verified checker.
 
 \begin{table}[t]
 \centering
 \caption{Real end-to-end run of \tool{} on the worked example with official exact
-\scip{} 10.0.1. Each certificate is re-checked by the kernel-checked \code{checkSem}.}
+\scip{} 10.0.1 (per-leaf MILPs from the verified leaf-aware encoder; each certificate
+re-checked by the kernel-checked \code{leafCheck}).}
 \label{tab:eval}
-\begin{tabular}{lrrrl}
+\begin{tabular}{lrrrrl}
 \toprule
-Leaf & \#vars & \#constraints & \#\vipr{} steps & reasons used \\
+Leaf & \#vars & \#int & \#constraints & \#\vipr{} steps & reasons used \\
 \midrule
-$\leaf_1=[-4]$      & 15 & 38 & 97  & \code{lin} \\
-$\leaf_2=[-2,4]$    & 13 & 33 & 174 & \code{lin}, \code{rnd}$\times2$ \\
-$\leaf_3=[2,1,4]$   & 10 & 26 & 123 & \code{lin} \\
-$\leaf_4=[2,-1,4]$  & 9  & 22 & 802 & \code{lin} \\
+$\leaf_1=[-4]$      & 16 & 3 & 38 & 97  & \code{lin} \\
+$\leaf_2=[-2,4]$    & 16 & 2 & 35 & 273 & \code{lin}, \code{rnd}$\times2$ \\
+$\leaf_3=[2,1,4]$   & 16 & 1 & 32 & 177 & \code{lin} \\
+$\leaf_4=[2,-1,4]$  & 16 & 1 & 32 & 983 & \code{lin}, \code{rnd}$\times1$ \\
 \midrule
-\multicolumn{5}{l}{\emph{Verdict:} coverage OK; all leaves \sound{} $\Rightarrow$
-$\forall x\in\dom.\ Y_0>Y_1$.} \\
+\multicolumn{6}{l}{\emph{Verdict:} coverage OK; all leaves \sound{}
+$\Rightarrow \forall x\in\dom.\ Y_0>Y_1$ (\code{certify\_network\_sound}).} \\
 \bottomrule
 \end{tabular}
 \end{table}
