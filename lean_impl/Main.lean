@@ -89,11 +89,15 @@ def checkLeafIO (net : Network) (prob : Problem) (obj : Objective)
     match parseVipr cert with
     | .error e => IO.eprintln s!"  leaf {leafIdx}: parse error: {e}"; return false
     | .ok v =>
-      if checkSem v then
-        IO.println s!"  leaf {leafIdx}: CERTIFIED (verified checkSem accepts SCIP's certificate)"
+      -- Full per-leaf check backing `certify_network_sound`: the verified checker accepts
+      -- the certificate AND the certificate's constraints correspond to this leaf's encoding
+      -- AND the integer variables are the encoder's binaries.
+      if leafCheckNet net prob.box leaf.toList obj.c obj.rhs v then
+        IO.println s!"  leaf {leafIdx}: CERTIFIED (verified leafCheck: cert validated + matches this leaf's encoding)"
         return true
       else
-        IO.eprintln s!"  leaf {leafIdx}: checkSem REJECTED the certificate"; return false
+        IO.eprintln s!"  leaf {leafIdx}: leafCheck REJECTED (checker or certificate↔encoding correspondence failed)"
+        return false
 
 def main (args : List String) : IO UInt32 := do
   let (netPath, aptpPath, viprDir) ← match args with

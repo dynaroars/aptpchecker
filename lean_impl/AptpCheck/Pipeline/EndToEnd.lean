@@ -49,11 +49,23 @@ def trustedSLe {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD → ℚ) (rh
   ++ (net.encFoldBinIds 0 lo hi L 0).flatMap
       (fun b => [(⟨'G', [⟨b, 1⟩], 0⟩ : SLe), ⟨'L', [⟨b, 1⟩], 1⟩])
 
-/-- The leaf-certificate correspondence check. -/
+/-- Order-insensitive row equality: same sense, same right-hand side, and forms equal *as
+functions* (`formEq`, so term reordering / duplicate merging by the solver is fine). -/
+def sameSLe (r t : SLe) : Bool :=
+  (r.sense == t.sense) && formEq r.form t.form && decide (r.rhs = t.rhs)
+
+theorem sameSLe_sat {r t : SLe} (h : sameSLe r t = true) {a : Valuation}
+    (ht : SLe.sat t a) : SLe.sat r a := by
+  simp only [sameSLe, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
+  obtain ⟨⟨hsense, hform⟩, hrhs⟩ := h
+  have hfe : r.form.eval a = t.form.eval a := formEq_sound hform a
+  simp only [SLe.sat] at ht ⊢
+  rw [hsense, hfe, hrhs]; exact ht
+
 def leafCheck {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD → ℚ) (rhs : ℚ)
     (lo hi : Fin inD → ℚ) (L : List Int) (cert : Vipr) : Bool :=
   checkSem cert
-  && (conSLes cert).all (fun r => decide (r ∈ trustedSLe net cc rhs lo hi L))
+  && (conSLes cert).all (fun r => (trustedSLe net cc rhs lo hi L).any (fun t => sameSLe r t))
   && cert.intVars.all (fun j => decide (j ∈ net.encFoldBinIds 0 lo hi L 0))
 
 /-! ## The binary trace values lie in `{0,1}` -/
@@ -121,11 +133,11 @@ theorem leafCheck_sound {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD →
   · -- integrality: every declared integer var is an encoder binary id
     exact encFold_binIds_int net lo hi L x j
       (of_decide_eq_true ((List.all_eq_true.mp hint_all) j hj))
-  · -- every CON row is a trusted row, hence satisfied by the trace
-    have hrt : r ∈ trustedSLe net cc rhs lo hi L :=
-      of_decide_eq_true ((List.all_eq_true.mp hcon_all) r hr)
-    simp only [trustedSLe] at hrt
-    rcases List.mem_append.mp hrt with hmap | hflat
+  · -- every CON row semantically matches some trusted row, hence is satisfied by the trace
+    obtain ⟨t, htmem, hmatch⟩ := List.any_eq_true.mp ((List.all_eq_true.mp hcon_all) r hr)
+    refine sameSLe_sat hmatch ?_
+    simp only [trustedSLe] at htmem
+    rcases List.mem_append.mp htmem with hmap | hflat
     · -- r = toSLeL l for l a box/encFold/objective row
       obtain ⟨l, hlmem, rfl⟩ := List.mem_map.mp hmap
       rw [toSLeL_sat]
@@ -199,5 +211,38 @@ theorem certify_network_sound (net : Network) (r : Σ outD : ℕ, MLP net.inDim 
         = ∑ k : Fin r.1, cc k * r.2.eval (fun j => x.getD j.val 0) k from
       Finset.sum_congr rfl (fun k _ => by rw [toMLP_eval net r hconv x k])]
   exact hsound
+
+/-- SCIP numbers certificate variables in its own order; each cert index `i` carries a
+name ending in our encoder's variable id (we emit `V{k}`; SCIP may prefix it, e.g.
+`t_V{k}`). Recover `k` from the trailing digits of the name. -/
+def ourIdxOfName (s : String) : Nat :=
+  (Ast.natOfDigits? (s.toList.reverse.takeWhile Char.isDigit).reverse).getD 0
+
+/-- Relabel a certificate's variable indices from SCIP's index space back into the
+encoder's, using the `VAR` names. Untrusted (a wrong relabel only makes the correspondence
+check fail); `checkSem` is invariant under consistent variable renaming, so a valid
+certificate stays valid. -/
+def relabelVipr (v : Ast.Vipr) : Ast.Vipr :=
+  let m : Nat → Nat := fun i => ourIdxOfName (v.varNames.getD i "")
+  let rf : LinForm → LinForm := fun f => f.map (fun t => ⟨m t.idx, t.coeff⟩)
+  { v with
+    cons := v.cons.map (fun c => { c with form := rf c.form })
+    ders := v.ders.map (fun d => { d with form := rf d.form })
+    objTerms := v.objTerms.map (fun p => (m p.1, p.2))
+    intVars := v.intVars.map m }
+
+/-- Executable per-leaf check for a parsed `Network` (the CLI's hook into `leafCheck`):
+converts the network to its MLP with the SAME box→(lo,hi) and objective conventions the
+encoder uses, then runs the full `leafCheck` (verified checker + certificate↔encoding
+correspondence + integer-variable check). `false` if the network is not an MLP. When this
+returns `true` for every leaf and coverage holds, `certify_network_sound` applies. -/
+def leafCheckNet (net : Network) (box : Array (ℚ × ℚ)) (leaf : List Int)
+    (c : Array ℚ) (rhs : ℚ) (cert : Ast.Vipr) : Bool :=
+  match toMLP net with
+  | none => false
+  | some ⟨_outD, mlp⟩ =>
+      leafCheck mlp (fun k => c.getD k.val 0) rhs
+        (fun i => (box.getD i.val (0, 0)).1) (fun i => (box.getD i.val (0, 0)).2) leaf
+        (relabelVipr cert)
 
 end AptpCheck.Pipeline
