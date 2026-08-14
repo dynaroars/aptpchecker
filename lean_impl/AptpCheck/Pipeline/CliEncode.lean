@@ -19,16 +19,9 @@ namespace AptpCheck.Model
 
 open AptpCheck.Cert
 
-/-- The ReLU-indicator variable ids, matching `encRows`' layout (binary of hidden neuron
-`i` in a `cons` block at `inBase+inD+hidD+i`). -/
-def MLP.binIds : {inD outD : ℕ} → MLP inD outD → ℕ → List Nat
-  | _, _, .last _ _, _ => []
-  | inD, _, .cons (hidD := hidD) _ _ rest, inBase =>
-      (List.finRange hidD).map (fun i => inBase + inD + hidD + i.val)
-      ++ rest.binIds (inBase + inD + hidD + hidD)
-
-/-- Build a leaf's MILP from the verified encoder: box rows ++ `encRows`, the objective
-row, and the binary ids. `none` if the network is not an MLP. -/
+/-- Build a leaf's MILP from the verified leaf-aware encoder `encFold`: box rows ++
+`encFold`, the objective row, and the (unstable-neuron) binary ids. `none` if the
+network is not an MLP. -/
 def encodeVerified (net : Network) (box : Array (ℚ × ℚ)) (leaf : List Int)
     (c : Array ℚ) (rhs : ℚ) : Option (List Le × Le × List Nat) :=
   match toMLP net with

@@ -559,28 +559,6 @@ lemma MLP.Agree.lastOut {inD outD : ℕ}
 
 /-! ## The recursive encoder, consistency predicate and objective -/
 
-open AptpCheck.Pipeline in
-/-- The MILP rows emitted by the sub-network, with input block at id `inBase`, input
-bounds `inLo/inHi`, leaf `L`, and neuron-count offset `gid0`. Layout per `cons` block:
-pre `[inBase+inD, +hidD)`, binary `[+hidD, +hidD)`, post `[+hidD, +hidD)`, then `rest`. -/
-def MLP.encRows : {inD outD : ℕ} → MLP inD outD → ℕ → (Fin inD → ℚ) → (Fin inD → ℚ) →
-    List Int → ℕ → List Le
-  | inD, outD, .last W b, inBase, _inLo, _inHi, _L, _gid0 =>
-      (List.finRange outD).flatMap (fun k =>
-        affEqRows (inBase + inD + k.val) (fun j => inBase + j.val) (fun j => W k j) (b k))
-  | inD, _outD, .cons (hidD := hidD) W b rest, inBase, inLo, inHi, L, gid0 =>
-      (List.finRange hidD).flatMap (fun i =>
-        affEqRows (inBase + inD + i.val) (fun j => inBase + j.val) (fun j => W i j) (b i))
-      ++ (List.finRange hidD).flatMap (fun i =>
-        reluRows (lbAff W b inLo inHi i) (ubAff W b inLo inHi i)
-          (inBase + inD + i.val) (inBase + inD + hidD + hidD + i.val)
-          (inBase + inD + hidD + i.val))
-      ++ (List.finRange hidD).flatMap (fun i =>
-        leafRows L (gid0 + i.val + 1) (inBase + inD + i.val))
-      ++ rest.encRows (inBase + inD + hidD + hidD)
-          (fun i => max (lbAff W b inLo inHi i) 0) (fun i => max (ubAff W b inLo inHi i) 0)
-          L (gid0 + hidD)
-
 /-- The leaf is consistent with the real signs: every fixed neuron's real pre-activation
 has the sign the leaf claims. `gid0` offsets the global 1-based neuron ids. -/
 def MLP.consistent : {inD outD : ℕ} → MLP inD outD → ℕ → (Fin inD → ℚ) → List Int → Prop
@@ -595,81 +573,6 @@ def MLP.consistent : {inD outD : ℕ} → MLP inD outD → ℕ → (Fin inD → 
 def MLP.objRow {inD outD : ℕ} (net : MLP inD outD) (inBase : ℕ) (cc : Fin outD → ℚ)
     (rhs : ℚ) : Le :=
   ⟨List.ofFn (fun k : Fin outD => (⟨net.outBase inBase + k.val, cc k⟩ : Term)), rhs⟩
-
-/-! ## The main induction: emitted rows are satisfied and the output block is exact -/
-
-/-- **Core induction.** If the input real values `xv` lie in `[inLo,inHi]`, the abstract
-valuation `a` agrees with the trace list from `inBase`, and the leaf is consistent, then
-`a` satisfies every emitted row and the output block holds the true network output. -/
-lemma MLP.encRows_sat_and_out {inD outD : ℕ} (net : MLP inD outD) :
-    ∀ (inBase : ℕ) (inLo inHi : Fin inD → ℚ) (L : List Int) (gid0 : ℕ)
-      (xv : Fin inD → ℚ) (a : Valuation),
-      (∀ i, inLo i ≤ xv i ∧ xv i ≤ inHi i) →
-      net.Agree inBase xv a →
-      net.consistent gid0 xv L →
-      (∀ r ∈ net.encRows inBase inLo inHi L gid0, Le.sat r a)
-      ∧ (∀ k, a (net.outBase inBase + k.val) = net.eval xv k) := by
-  induction net with
-  | last W b =>
-      intro inBase inLo inHi L gid0 xv a _hb hag _hcon
-      refine ⟨?_, ?_⟩
-      · intro r hr
-        simp only [MLP.encRows, List.mem_flatMap, List.mem_finRange, true_and] at hr
-        obtain ⟨k, hr⟩ := hr
-        refine affEqRows_sat _ _ _ _ a ?_ r hr
-        rw [hag.lastOut k]
-        simp only [preAct]
-        have hs : (∑ j, W k j * a (inBase + j.val)) = (∑ j, W k j * xv j) :=
-          Finset.sum_congr rfl (fun j _ => by rw [hag.input j])
-        rw [hs]
-      · intro k
-        simp only [MLP.outBase, MLP.eval]
-        exact hag.lastOut k
-  | @cons inD hidD outD W b rest ih =>
-      intro inBase inLo inHi L gid0 xv a hb hag hcon
-      simp only [MLP.consistent] at hcon
-      have hpb : ∀ i : Fin hidD,
-          lbAff W b inLo inHi i ≤ preAct W b xv i ∧ preAct W b xv i ≤ ubAff W b inLo inHi i :=
-        fun i => affine_interval_sound (W i) xv inLo inHi (b i)
-          (fun j => (hb j).1) (fun j => (hb j).2)
-      have hb' : ∀ i : Fin hidD,
-          max (lbAff W b inLo inHi i) 0 ≤ postAct W b xv i ∧
-          postAct W b xv i ≤ max (ubAff W b inLo inHi i) 0 := by
-        refine fun i => ⟨?_, ?_⟩
-        · simp only [postAct]; exact max_le_max (hpb i).1 le_rfl
-        · simp only [postAct]; exact max_le_max (hpb i).2 le_rfl
-      obtain ⟨ih_rows, ih_out⟩ := ih (inBase + inD + hidD + hidD)
-        (fun i => max (lbAff W b inLo inHi i) 0) (fun i => max (ubAff W b inLo inHi i) 0)
-        L (gid0 + hidD) (postAct W b xv) a hb' hag.rest hcon.2
-      refine ⟨?_, ?_⟩
-      · intro r hr
-        simp only [MLP.encRows, List.mem_append, List.mem_flatMap, List.mem_finRange,
-          true_and] at hr
-        rcases hr with (((⟨i, hr⟩ | ⟨i, hr⟩) | ⟨i, hr⟩) | hr)
-        · -- pre-activation affine equalities
-          refine affEqRows_sat _ _ _ _ a ?_ r hr
-          rw [hag.consPre i]
-          simp only [preAct]
-          have hs : (∑ j, W i j * a (inBase + j.val)) = (∑ j, W i j * xv j) :=
-            Finset.sum_congr rfl (fun j _ => by rw [hag.input j])
-          rw [hs]
-        · -- big-M ReLU rows
-          refine reluRows_sat (lbAff W b inLo inHi i) (ubAff W b inLo inHi i)
-            (inBase + inD + i.val) (inBase + inD + hidD + hidD + i.val)
-            (inBase + inD + hidD + i.val) a ?_ ?_ ?_ ?_ r hr
-          · rw [hag.consPre i]; exact (hpb i).1
-          · rw [hag.consPre i]; exact (hpb i).2
-          · rw [hag.consPost i, hag.consPre i]; simp only [postAct]
-          · rw [hag.consBin i, hag.consPre i]; simp only [binAct]
-        · -- leaf sign rows
-          refine leafRows_sat L (gid0 + i.val + 1) (inBase + inD + i.val) a ?_ ?_ r hr
-          · intro hmem; rw [hag.consPre i]; exact (hcon.1 i).1 hmem
-          · intro hmem; rw [hag.consPre i]; exact (hcon.1 i).2 hmem
-        · -- recursive rows
-          exact ih_rows r hr
-      · intro k
-        simp only [MLP.outBase, MLP.eval]
-        exact ih_out k
 
 /-! ## Top-level over-approximation and refutation for a general MLP -/
 
@@ -696,57 +599,6 @@ lemma MLP.boxRows_sat_trace {inD outD : ℕ} (net : MLP inD outD) (lo hi x : Fin
   · simp only [Le.sat, LinForm.eval, List.map_cons, List.map_nil, List.sum_cons,
       List.sum_nil, neg_one_mul, add_zero, htx]
     linarith [(hx j).1]
-
-open AptpCheck.Pipeline in
-/-- **Encoding over-approximation for a general MLP.** For any input `x` in the box whose
-true ReLU signs are consistent with the leaf `L`, the real trace valuation is a feasible
-point of every emitted row (box + affine equalities + big-M ReLU + leaf signs) and the
-objective evaluates to `c · net(x)`. -/
-theorem encoding_overapprox_mlp {inD outD : ℕ} (net : MLP inD outD)
-    (cc : Fin outD → ℚ) (rhs : ℚ) (lo hi : Fin inD → ℚ) (L : List Int)
-    (x : Fin inD → ℚ) (hx : ∀ j, lo j ≤ x j ∧ x j ≤ hi j)
-    (hcon : net.consistent 0 x L) :
-    ∃ a : Valuation,
-      (∀ r ∈ boxRows lo hi ++ net.encRows 0 lo hi L 0, Le.sat r a) ∧
-      (net.objRow 0 cc rhs).form.eval a = ∑ k, cc k * net.eval x k := by
-  obtain ⟨hrows, hout⟩ :=
-    net.encRows_sat_and_out 0 lo hi L 0 x (net.trace x) hx (net.agree_trace x) hcon
-  refine ⟨net.trace x, ?_, ?_⟩
-  · intro r hr
-    rcases List.mem_append.mp hr with hbox | henc
-    · exact net.boxRows_sat_trace lo hi x hx r hbox
-    · exact hrows r henc
-  · rw [net.objRow_eval 0 cc rhs (net.trace x)]
-    exact Finset.sum_congr rfl (fun k _ => by rw [hout k])
-
-open AptpCheck.Pipeline in
-/-- **Per-leaf refutation for a general MLP.** A Farkas certificate refuting the emitted
-rows together with the negated objective proves `c · net(x) > rhs` for every `x` in the
-box consistent with the leaf. -/
-theorem certified_sound_mlp {inD outD : ℕ} (net : MLP inD outD)
-    (cc : Fin outD → ℚ) (rhs : ℚ) (lo hi : Fin inD → ℚ) (L : List Int)
-    (x : Fin inD → ℚ) (hx : ∀ j, lo j ≤ x j ∧ x j ≤ hi j)
-    (hcon : net.consistent 0 x L)
-    (comb : List (ℚ × Le))
-    (hsub : ∀ p ∈ comb,
-      p.2 ∈ (net.objRow 0 cc rhs :: (boxRows lo hi ++ net.encRows 0 lo hi L 0)))
-    (hnn : ∀ p ∈ comb, 0 ≤ p.1)
-    (hcancel : (comb.map (fun p => p.1 * p.2.form.eval (net.trace x))).sum = 0)
-    (hneg : (comb.map (fun p => p.1 * p.2.rhs)).sum < 0) :
-    rhs < ∑ k, cc k * net.eval x k := by
-  obtain ⟨hrows, hout⟩ :=
-    net.encRows_sat_and_out 0 lo hi L 0 x (net.trace x) hx (net.agree_trace x) hcon
-  have hall : ∀ r ∈ boxRows lo hi ++ net.encRows 0 lo hi L 0, Le.sat r (net.trace x) := by
-    intro r hr
-    rcases List.mem_append.mp hr with h | h
-    · exact net.boxRows_sat_trace lo hi x hx r h
-    · exact hrows r h
-  have h := refute_of_cert (boxRows lo hi ++ net.encRows 0 lo hi L 0) (net.objRow 0 cc rhs)
-    (net.trace x) comb hsub hnn hcancel hneg hall
-  rw [net.objRow_eval 0 cc rhs (net.trace x)] at h
-  rw [show (∑ k, cc k * (net.trace x) (net.outBase 0 + k.val)) = ∑ k, cc k * net.eval x k from
-    Finset.sum_congr rfl (fun k _ => by rw [hout k])] at h
-  exact h
 
 /-! ## Bridge to the coverage `satLeaf` interface
 
@@ -785,23 +637,5 @@ lemma MLP.consistent_of_signMatch {inD outD : ℕ} (net : MLP inD outD) :
         simp only [Bool.not_eq_true'] at h
         exact le_of_lt (not_le.mp (of_decide_eq_false h))
       · exact ih (gid0 + hidD) (postAct W b xv) σ L hmatch.2 hsat
-
-open AptpCheck.Pipeline in
-/-- **Per-leaf refutation, `satLeaf` form.** As `certified_sound_mlp`, but with the
-consistency hypothesis phrased through the coverage `satLeaf` interface: `σ` is the true
-sign vector (`signMatch`) and the leaf is satisfied by `σ`. -/
-theorem certified_sound_mlp_satLeaf {inD outD : ℕ} (net : MLP inD outD)
-    (cc : Fin outD → ℚ) (rhs : ℚ) (lo hi : Fin inD → ℚ) (L : List Int) (σ : Nat → Bool)
-    (x : Fin inD → ℚ) (hx : ∀ j, lo j ≤ x j ∧ x j ≤ hi j)
-    (hmatch : net.signMatch 0 x σ) (hsat : satLeaf L σ = true)
-    (comb : List (ℚ × Le))
-    (hsub : ∀ p ∈ comb,
-      p.2 ∈ (net.objRow 0 cc rhs :: (boxRows lo hi ++ net.encRows 0 lo hi L 0)))
-    (hnn : ∀ p ∈ comb, 0 ≤ p.1)
-    (hcancel : (comb.map (fun p => p.1 * p.2.form.eval (net.trace x))).sum = 0)
-    (hneg : (comb.map (fun p => p.1 * p.2.rhs)).sum < 0) :
-    rhs < ∑ k, cc k * net.eval x k :=
-  certified_sound_mlp net cc rhs lo hi L x hx
-    (net.consistent_of_signMatch 0 x σ L hmatch hsat) comb hsub hnn hcancel hneg
 
 end AptpCheck.Model

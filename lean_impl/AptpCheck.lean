@@ -11,7 +11,6 @@ import AptpCheck.Ast.Aptp
 import AptpCheck.Ast.Net
 import AptpCheck.Model.Network
 import AptpCheck.Model.Encoding
-import AptpCheck.Model.Encoder
 import AptpCheck.Model.EncodingSound
 import AptpCheck.Model.EncodeFold
 import AptpCheck.Model.NetworkMLP
