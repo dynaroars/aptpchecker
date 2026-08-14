@@ -587,14 +587,17 @@ $A x \le b$ (variables $x$ collecting inputs and per-layer pre/post-activations)
 \S\ref{sec:background}, add the leaf's sign constraints, and add the \emph{negated}
 property $c\cdot y \le \rho$. Discharging $\leaf$ means proving this system infeasible.
 
-\paragraph{Untrusted \scip{}, checked \vipr{}.} We hand the system to \scip-Ex, which
-returns a \vipr{} certificate of infeasibility. Our checker replays the \code{DER}
-list over $\Q$: for each \code{lin} step with multipliers $y$ it verifies
-sign-consistency and that the aggregate dominates the stated constraint; \code{rnd}
-adds an integer floor/ceil under integrality; \code{uns} combines two children over a
-complementary integer split and discharges the branch assumption. Acceptance requires
-the final derived constraint to be an absurdity with empty assumption set. The only
-non-arithmetic fact used is the soundness (\emph{easy}) direction of Farkas:
+\paragraph{Untrusted \scip{}, checked \vipr{}.} We hand the system to exact \scip{},
+which returns a \vipr{} certificate of infeasibility. Re-checking that certificate is a
+self-contained problem, independent of neural networks, and we treat it in a companion
+paper~\cite{companion}: a kernel-checked \lean{} checker, \code{checkSem}, replays the
+\code{DER} list over $\Q$---signed \emph{suitable} combinations, \code{rnd} rounding
+under integrality, and \code{uns} branch-and-bound case-splits with assumption
+discharge---and its soundness theorem \code{checkSem\_sound} (axiom-clean) states that
+acceptance implies the certified system is infeasible over the integers. Here we use it
+as a black box with that guarantee. Its only non-arithmetic ingredient is the soundness
+(\emph{easy}) direction of Farkas, which is also the two-line core of the per-leaf
+argument:
 
 \begin{lemma}[Farkas, checking direction]\label{lem:farkas}
 For $A\in\Q^{m\times n}$, $b\in\Q^m$, $y\in\Q^m$: if $y\ge 0$, $y^{\!\top}\!A = 0$ and
@@ -711,23 +714,15 @@ statement is on a dimension-indexed \code{MLP} normal form ending in a linear sc
 layer; \code{Flatten} is the identity and elided, consecutive linears/ReLUs collapse,
 and \emph{Conv/CNN is out of scope}, left as future work.)
 
-\emph{Certificate replay} is mechanized as a complete, automatic, runnable checker
-\code{checkSem} over the certificate's own \emph{sensed} constraints
-($\le$/$\ge$/$=$), implementing full VIPR~v1.0 verification semantics and consuming
-the solver's flat, index-referenced derivation list \emph{directly} --- no
-tree-reshaping step exists. Its ingredients are proved axiom-clean: the
-\emph{suitable linear combination} (signed multipliers over mixed senses, per-term
-monotonicity generalizing Lemma~\ref{lem:farkas}), constraint \emph{domination}
-including the spec's absurdity-dominates-anything rule, \code{rnd} (integer rounding
-of the combined row, both directions), and \code{uns} (an integer case-split: the two
-discharged rows must be complementary integer bounds $f\le\beta\,/\,f\ge\beta{+}1$,
-each branch's row must dominate the stated row, and each derived row carries the set
-of still-open assumptions, discharged exactly at its split). The replay invariant
-(\code{sfreplay\_holds}: every derived row holds under its open assumptions) gives
-\code{checkSemCore\_sound}: if the checker accepts --- the final row an absurdity with
-no open assumptions --- no valuation with the declared variables integral satisfies
-the \code{CON} rows, i.e.\ the MILP is infeasible. \code{checkSem\_sound} composes
-this with the VIPR parser. The checker is validated on \emph{real} certificates from
+\emph{Certificate replay} is a complete, automatic, runnable, kernel-checked checker
+\code{checkSem}, whose full development---the VIPR~v1.0 calculus (signed suitable
+combinations, domination, Gomory rounding, and branch-and-bound case-splits with
+assumption discharge), the flat replay, and the soundness theorem
+\code{checkSem\_sound}---is the subject of the companion paper~\cite{companion}. We
+summarize only what this paper consumes: \code{checkSem} replays the certificate's own
+\code{DER} list over $\Q$ and \code{checkSem\_sound} (axiom-clean) states that
+acceptance implies the certified constraint system is infeasible over the integers. It
+is validated on \emph{real} certificates from
 official exact \scip{}~10.0.1: signed-multiplier and Gomory-cut proofs on the worked
 example's leaves, and a genuinely branched proof (\code{asm}/\code{uns}) on a knapsack
 instance --- each also correctly \emph{rejected} when the integrality declarations are

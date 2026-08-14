@@ -1,0 +1,533 @@
+\documentclass[runningheads]{llncs}
+
+\usepackage{amsmath,amssymb}
+\usepackage{amsfonts}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+% ---- macros ----
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\scip}{\textsc{SCIP}}
+\newcommand{\vipr}{\textsc{Vipr}}
+\newcommand{\lean}{\textsc{Lean\,4}}
+\newcommand{\eval}{\mathrm{eval}}
+
+\lstset{basicstyle=\ttfamily\footnotesize,breaklines=true,columns=fullflexible}
+
+\begin{document}
+
+\title{A Kernel-Checked Verifier for Exact Mixed-Integer Programming Certificates}
+\subtitle{Re-checking \vipr{} infeasibility certificates in \lean{}, in exact rationals}
+
+\author{Anonymous}
+\institute{Anonymous}
+
+\maketitle
+
+\begin{abstract}
+Exact mixed-integer programming (MIP) solvers such as the exact rational mode of
+\scip{} can, alongside a claimed result, emit a \vipr{} certificate: a step-by-step
+derivation intended to \emph{prove} that result to an independent checker. Today that
+checker is an unverified C\texttt{++} program (\code{viprchk}), so the trust chain ends
+at a piece of software as complex as the solver's proof logging. We present a
+\emph{formally verified} checker for \vipr{} infeasibility certificates, mechanized in
+\lean{} and checked by its kernel. The checker reasons entirely in exact rationals (no
+floating point), consumes the solver's flat, index-referenced derivation list directly,
+and implements the full \vipr~v1.0 derivation calculus: signed \emph{suitable linear
+combinations} over mixed-sense constraints, constraint \emph{domination} (including the
+spec's ``absurdity dominates anything'' rule), Gomory \emph{rounding}, and
+branch-and-bound \emph{case-splits} with assumption tracking. Its top theorem
+(\code{checkSem\_sound}) states that acceptance implies the certified constraint system
+is genuinely infeasible over integer-valued assignments; it depends only on \lean{}'s
+three standard axioms (no \code{native\_decide}, no \code{sorry}). We validate it on
+\emph{real} certificates from official exact \scip~10.0.1---a branch-and-bound proof for
+an infeasible knapsack and the per-branch systems of a neural-network verifier---and show
+that tampering (dropping integrality, truncating the proof) is correctly rejected. The
+untrusted solver plus verified checker gives a trust base orders of magnitude smaller
+than the solver itself, while accepting the solver's real output unchanged.
+\end{abstract}
+
+%===============================================================================
+\section{Introduction}\label{sec:intro}
+
+Optimization solvers are large, heavily-optimized, floating-point programs, and a wrong
+``infeasible'' or ``optimal'' answer from one can invalidate whatever depends on it---a
+hardware-verification result, a scheduling guarantee, a neural-network safety proof. The
+established remedy is \emph{certification}: the solver emits, next to its answer, a
+machine-readable proof that an independent, simpler \emph{checker} can validate. For
+mixed-integer programming the certificate format is \vipr{} (``Verifying Integer
+Programming Results'')~\cite{vipr}, produced today by the exact rational solving mode of
+\scip{}~\cite{eifler,scip}.
+
+There is a gap in this story. The \vipr{} checker itself, \code{viprchk}, is an
+unverified C\texttt{++} program. It is far simpler than \scip{}, but it is still a
+nontrivial piece of software that parses a certificate, replays a derivation calculus
+with several rule kinds, and does exact rational arithmetic---any bug in it (a
+mis-parsed coefficient, a wrongly-applied rounding rule, an off-by-one in the
+case-split bookkeeping) can make it \emph{accept an invalid certificate}, silently
+reinstating the trust in the solver that certification was supposed to remove. If we
+want the checker's ``valid'' to carry a proof-level guarantee, the checker must itself be
+verified.
+
+\paragraph{Contribution.} We present a \vipr{} infeasibility-certificate checker whose
+soundness is \emph{machine-checked} by the \lean{} kernel. Concretely:
+\begin{itemize}
+\item An exact-rational model of \vipr{} constraints and the full v1.0 derivation
+      calculus---assumptions, suitable signed linear combinations, Gomory rounding, and
+      branch-and-bound case-splits---each rule proved sound in \lean{}
+      (\S\ref{sec:calculus}).
+\item A runnable \code{Bool} checker \code{checkSem} that replays the certificate's flat
+      derivation list against the certificate's own constraints, with assumption-set
+      bookkeeping for case-splits, and a theorem \code{checkSem\_sound}: if it accepts,
+      no integer-valued assignment satisfies the constraints (\S\ref{sec:replay}). There
+      is no intermediate ``tree'' or reshaping step---the checker consumes the solver's
+      flat list directly.
+\item A verified parser for the \vipr~v1.0 text format, so the certificate file itself
+      is not part of the trusted base (\S\ref{sec:parser}).
+\item Kernel-checked, axiom-clean throughout (only \code{propext},
+      \code{Classical.choice}, \code{Quot.sound}; no \code{native\_decide}), and
+      validated on \emph{real} official-\scip{} certificates (\S\ref{sec:eval}).
+\end{itemize}
+The trusted base shrinks to \lean{}'s kernel plus our short, human-readable definitions
+of ``satisfies'' and ``infeasible''; \scip{} is untrusted, and a solver bug can at worst
+cause a spurious \emph{rejection}, never a false ``valid''.
+
+\paragraph{A running example.} We thread one small but complete certificate through the
+whole paper: the integer-infeasible knapsack
+\begin{equation}\label{eq:knap}
+6x+10y+15z=23,\qquad x+y+z\ge1,\qquad 0\le x\le3,\ 0\le y\le2,\ 0\le z\le1,\qquad x,y,z\in\Z.
+\end{equation}
+Its linear relaxation is feasible (e.g.\ $x{=}y{=}0,\ z{=}23/15$), so no single Farkas
+combination refutes it; but no \emph{integer} point satisfies it (a case analysis on the
+integer variables is unavoidable). Official exact \scip{}~10.0.1 solves it by
+branch-and-bound and emits the \vipr{} certificate we dissect in \S\ref{sec:format} and
+verify in \S\ref{sec:calculus}--\S\ref{sec:replay}. It exercises \emph{every} rule of the
+calculus, which is exactly why we chose it.
+
+%===============================================================================
+\section{The \vipr{} format and a complete certificate}\label{sec:format}
+
+\subsection{Certificates at a glance}
+A \vipr~v1.0 file~\cite{vipr} describes a problem and a derivation, in seven sections:
+\code{VER} (version), \code{VAR} (variable names, which fix variable \emph{indices}
+$0,\dots,n{-}1$), \code{INT} (which indices are integer), \code{OBJ} (objective),
+\code{CON} (the problem constraints), \code{RTP} (relation-to-prove; here
+\code{infeas}), \code{SOL} (solutions, unused for infeasibility), and \code{DER} (the
+derivation). Constraints---both problem constraints and derived ones---share one format:
+a name, a sense (\code{E}/\code{L}/\code{G} for $=/\le/\ge$), a right-hand side, and
+either an explicit sparse form $p\ i_1\ a_1\ \cdots\ i_p\ a_p$ (meaning
+$\sum_j a_{i_j}X_{i_j}$) or the keyword \code{OBJ}. All numbers are \emph{exact}
+rationals (finite decimals or $p/q$). Constraints are numbered $0,1,2,\dots$ in file
+order: the \code{CON} rows first, then each \code{DER} row.
+
+Each derived constraint carries a \emph{reason} justifying it from earlier constraints:
+\begin{description}
+\item[\code{\{ asm \}}] the constraint is \emph{assumed} (a branch hypothesis).
+\item[\code{\{ lin $p$ $i_1$ $\lambda_1 \cdots i_p \lambda_p$ \}}] the constraint is a
+      \emph{suitable linear combination} $\sum_j \lambda_j C_{i_j}$ of earlier
+      constraints that \emph{dominates} it (\S\ref{sec:calc-lin}).
+\item[\code{\{ rnd $\cdots$ \}}] like \code{lin}, then the combined constraint's constant
+      is \emph{rounded} using integrality (\S\ref{sec:calc-rnd}).
+\item[\code{\{ uns $i_1$ $l_1$ $i_2$ $l_2$ \}}] an \emph{unsplit} (case-split): the two
+      earlier constraints $i_1,i_2$ each dominate this one, and $l_1,l_2$ are
+      complementary integer bounds $f\le\beta$ and $f\ge\beta{+}1$ that were assumed on
+      the two branches (\S\ref{sec:calc-uns}).
+\item[\code{\{ sol \}}] a solution check (unused for infeasibility).
+\end{description}
+A certificate proves infeasibility when its \emph{last} derived constraint is an
+\emph{absurdity}---a $0\le\beta$ with $\beta<0$ (or $0\ge\beta$ with $\beta>0$, or
+$0=\beta$ with $\beta\neq0$)---that rests on no open assumptions.
+
+\subsection{The knapsack certificate, dissected}\label{sec:knap-dissect}
+Figure~\ref{fig:knap} is the certificate exact \scip{} produced for~\eqref{eq:knap}
+(variable order $y,x,z$, i.e.\ indices $0,1,2$). Its shape is a depth-one
+branch-and-bound tree on the integer variable $y$:
+\begin{enumerate}
+\item \textbf{Split (\code{asm}).} \code{A9}: assume $y\le0$; \code{A10}: assume $y\ge1$.
+      These are the two branches; together they are exhaustive because $y$ is an integer.
+\item \textbf{Branch $y\le0$.} A chain of \code{lin}/\code{rnd} steps
+      (\code{ACT\_L12}\,\dots\,\code{ACT\_R26}) tightens the relaxation using the bound
+      $y\le0$ until \code{ActivityConflict27} derives $0\le-1$: an absurdity. So the
+      $y\le0$ branch is infeasible.
+\item \textbf{Branch $y\ge1$.} Symmetrically, \code{ACT\_L29}\,\dots\,\code{ACT\_R37}
+      lead to \code{ActivityConflict38}: $0\le-2$, again absurd.
+\item \textbf{Combine (\code{uns}).} \code{UnsplitNode1\_39}:
+      \code{uns 27 10 38 9} says ``branch-conclusion 27 (which used the bound
+      $10=$\code{A10}) and branch-conclusion 38 (which used $9=$\code{A9}) both prove the
+      goal, and \code{A9}/\code{A10} are complementary integer bounds on $y$''. It
+      discharges both assumptions and states the global contradiction $0\ge1$, with no
+      open assumptions. \code{RTP infeas} is established.
+\end{enumerate}
+The \code{DualBound} rows (\code{lin 0}, empty combination) are objective-bound
+bookkeeping and play no role in an infeasibility proof. Note the individual \code{lin}
+steps use \emph{signed} multipliers over \emph{mixed} senses: e.g.\ \code{ACT\_L12} is
+$-1\cdot C_0 + 10\cdot\code{A10} + 6\cdot B_4$, combining an equality ($C_0$), a
+$\ge$-assumption (\code{A10}) and a $\ge$-bound ($B_4$). Making sense of ``multiply a
+constraint by a negative number and add'' \emph{soundly}, for every sense combination,
+is the heart of \S\ref{sec:calc-lin}.
+
+\begin{figure}[t]
+\centering
+\begin{lstlisting}
+VAR 3 : t_y t_x t_z          INT 3 : 0 1 2      OBJ min 0
+CON 8 6
+ C0 E 23  3 0 10 1 6 2 15      % 10y + 6x + 15z = 23
+ C1 G 1   3 0 1 1 1 2 1        % y + x + z >= 1
+ B2 G 0 (y>=0)  B3 L 2 (y<=2)  B4 G 0 (x>=0)  B5 L 3 (x<=3)
+ B6 G 0 (z>=0)  B7 L 1 (z<=1)
+RTP infeas
+DER 32
+ A9  L 0  1 0 1  { asm }                          % assume y <= 0
+ A10 G 1  1 0 1  { asm }                          % assume y >= 1
+ ACT_L12 ... { lin 3  0 -1  10 10  4 6 }          % -C0 +10*A10 +6*B4
+ ACT_R14 ... { rnd 1  13 1 }                      % Gomory-round row 13
+ ... (branch y<=0) ...  ActivityConflict27 L -1 0 { lin 4 ... }   % 0 <= -1
+ ... (branch y>=1) ...  ActivityConflict38 L -2 0 { lin 4 ... }   % 0 <= -2
+ UnsplitNode1_39 G 1 0 { uns 27 10  38 9 }        % 0 >= 1  (no open assumptions)
+\end{lstlisting}
+\caption{The real exact-\scip{} certificate for the infeasible
+knapsack~\eqref{eq:knap} (abridged). Split on $y$; each branch reaches an absurdity by
+signed combinations and Gomory cuts; \code{uns} discharges the split.}
+\label{fig:knap}
+\end{figure}
+
+%===============================================================================
+\section{Exact representation and parsing}\label{sec:parser}
+
+\paragraph{Rationals and forms.} The checker works over $\Q$ (\lean{}/Mathlib's exact
+rationals). A \emph{sparse linear form} is a list of \code{Term}s $\langle
+i,a\rangle$ ($a\cdot X_i$), with $\code{LinForm.eval}\ f\ a = \sum_{\langle i,c\rangle\in
+f} c\cdot a(i)$ over an assignment $a:\N\to\Q$. A \emph{sensed constraint} is
+$\code{SLe} = \langle \mathit{sense}, \mathit{form}, \mathit{rhs}\rangle$ with
+\[
+\code{SLe.sat}\ \langle s,f,\beta\rangle\ a \;=\;
+\begin{cases}
+f.\eval\,a \le \beta & s=\code{'L'}\\
+\beta \le f.\eval\,a & s=\code{'G'}\\
+f.\eval\,a = \beta & s=\code{'E'}\\
+\bot & \text{otherwise.}
+\end{cases}
+\]
+This four-line definition is the \emph{only} thing one must read to trust what
+``satisfies'' means; the rest is proved against it.
+
+\paragraph{Verified parser.} \code{parseVipr} reads the v1.0 text into a \code{Vipr}
+structure (sections, constraints, and the \code{DER} list with reasons). Numbers are
+parsed \emph{exactly}: \code{parseNum?} accepts either a decimal (converted to its exact
+rational value---e.g.\ $0.2$ becomes $13421773/67108864$ when it originates from a
+binary float, or an exact finite decimal otherwise) or a fraction $p/q$; there is no
+\code{Float} anywhere on the path. \code{Vipr.conSLes} normalizes the \code{CON} section
+to \code{SLe} rows (objective references resolved). Because the parser is a total,
+inspectable function and the soundness theorem is stated about \emph{its output}, the
+certificate \emph{file} is outside the trusted base: a mis-parse cannot manufacture a
+valid-looking infeasibility.
+
+%===============================================================================
+\section{The verification calculus, rule by rule}\label{sec:calculus}
+
+Every rule is proved sound in \lean{} against \code{SLe.sat}. We state each rule, its
+soundness lemma (with the exact \lean{} name), a proof sketch, and where it fires in the
+knapsack certificate.
+
+\subsection{The Farkas core}\label{sec:calc-farkas}
+Everything rests on one classical fact, in its easy (checking) direction.
+
+\begin{lemma}[\code{farkas\_le}]\label{lem:farkas}
+Let $\mathrm{comb}=[(y_1,C_1),\dots,(y_k,C_k)]$ be $\le$-constraints $C_j:\
+\mathrm{form}_j\le r_j$ with multipliers $y_j\ge0$. If at an assignment $a$ the linear
+parts cancel, $\sum_j y_j\,\mathrm{form}_j(a)=0$, and the constants are negative,
+$\sum_j y_j r_j<0$, then not all $C_j$ hold at $a$.
+\end{lemma}
+\begin{proof}
+If every $C_j$ held, then $y_j\,\mathrm{form}_j(a)\le y_j r_j$ termwise (multiply
+$\mathrm{form}_j(a)\le r_j$ by $y_j\ge0$); summing, $0=\sum_j y_j\,\mathrm{form}_j(a)\le
+\sum_j y_j r_j<0$, a contradiction. In \lean{} the termwise step is
+\code{mul\_le\_mul\_of\_nonneg\_left} and the sum is a straightforward list induction
+(\code{list\_sum\_le}). \qed
+\end{proof}
+
+\code{refute\_of\_cert} packages the same combination against a row set plus a negated
+goal, and \code{infeasible\_of\_farkas} against a plain row set; these are what a
+branch's terminal $0\le-1$ ultimately invokes.
+
+\subsection{Suitable linear combinations (\code{lin})}\label{sec:calc-lin}
+The certificate multiplies constraints of \emph{different senses} by \emph{signed}
+coefficients. \vipr{}'s ``suitability'' rule assigns each sense a sign
+$s(\code{L}){=}-1,\ s(\code{E}){=}0,\ s(\code{G}){=}+1$ (\code{senseSign}) and requires
+that all $\lambda_j\, s(C_j)$ share one sign; the combination then has a determined
+sense. The soundness is a per-term monotonicity fact:
+
+\begin{lemma}[\code{term\_le}]\label{lem:term}
+If $C$ is satisfied at $a$ and $\lambda\cdot s(C)\le0$, then
+$\lambda\cdot\mathrm{form}(a)\le\lambda\cdot\mathrm{rhs}$.
+\end{lemma}
+\begin{proof}
+Case on the sense. \code{L} ($\mathrm{form}(a)\le\mathrm{rhs}$) forces $\lambda\ge0$, so
+multiply by $\lambda\ge0$. \code{G} ($\mathrm{rhs}\le\mathrm{form}(a)$) forces
+$\lambda\le0$, so multiplying flips the inequality into the claimed direction. \code{E}
+gives equality, which holds for any $\lambda$. (\code{term\_ge} is the mirror image for
+the $\ge$-deriving case.) \qed
+\end{proof}
+
+Summing Lemma~\ref{lem:term} over the combination (\code{comb\_le\_terms}) and reusing
+the exact combined form/rhs (\code{scomb}, built from \code{combineForm}/\code{combine})
+yields \code{scomb\_le\_sat}: \emph{a suitable, all-$\lambda s\le0$ combination of
+satisfied constraints satisfies its combined row as a $\le$-row}; \code{scomb\_ge\_sat}
+is the $\ge$ version. The checkable rule \code{linCheck} then verifies (i) the sign rule,
+(ii) that the combined form equals the stated form \emph{as a function}
+(\code{formEq}---see below, so term reordering is irrelevant), and (iii) the rhs
+dominates in the stated sense; \code{linCheck\_sound} discharges the stated row via
+\code{scomb\_le\_sat}/\code{scomb\_ge\_sat}. Finally, a combination can be an
+\emph{absurdity} on its own (identically-zero form, contradictory constant): the rule
+\code{linAbsurd} recognizes this and \code{linAbsurd\_false} shows such a combination is
+\emph{unsatisfiable}, so it dominates \emph{any} stated row (VIPR's
+``absurdity-dominates-anything''); this is exactly how each branch's
+\code{ActivityConflict} ($0\le-1$) is accepted.
+
+\emph{In the knapsack:} \code{ACT\_L12}'s $-1\cdot C_0+10\cdot\code{A10}+6\cdot B_4$ has
+$\lambda\,s = (-1)(0),\,(10)(+1),\,(6)(+1)$, all $\ge0$, so it soundly derives a
+$\ge$-row; \code{ActivityConflict27}'s combination is an absurdity, accepted via
+\code{linAbsurd\_false}.
+
+\subsection{Rounding (\code{rnd})}\label{sec:calc-rnd}
+If a $\le$-row's form is \emph{integer-valued} at every integer assignment---all
+coefficients are integers on integer variables---then its constant may be floored:
+$f(a)\le\beta$ and $f(a)\in\Z$ give $f(a)\le\lfloor\beta\rfloor$. Integrality is
+captured by \code{IsIntVal} and \code{LinForm.eval\_isInt}; the rounding step is
+\code{rnd\_sound} (floor, $\le$-direction) with mirror \code{rnd\_ge} (ceil,
+$\ge$-direction, via \code{Int.ceil\_le}). \code{rndCheck} first re-derives the
+combination as in \S\ref{sec:calc-lin}, checks the combined form is integer-valued
+(\code{formIntB}: integer coefficients, integer-declared variables), rounds, and checks
+domination; \code{rndCheck\_sound} chains \code{scomb\_le\_sat}$\to$\code{rnd\_sound}.
+These are the Gomory cuts: \emph{in the knapsack}, \code{ACT\_R14} rounds row 13 down,
+turning a fractional relaxation bound into an integer-valid one---the step that makes
+each branch close.
+
+\subsection{Domination}\label{sec:calc-dom}
+A \code{lin}/\code{rnd}/\code{uns} step justifies a \emph{stated} row that need not be the
+combination verbatim: the derivation may state any row the combination \emph{dominates}.
+Two subtleties bite on real certificates. First, the solver lists a form's terms in a
+different order than we do; we compare forms as \emph{functions}: \code{formEq} $f\ g$
+holds iff $f-g$ is identically zero (via a normal form \code{normForm}/\code{formIsZero}),
+and \code{formEq\_sound} proves $f(a)=g(a)$ for all $a$. Second, an \emph{absurdity}
+dominates anything (\code{absurdB}/\code{absurd\_unsat}). \code{domSLe} combines these:
+$c$ dominates $d$ if $c$ is an absurdity, or $c,d$ agree in form (\code{formEq}) and sense
+with a rhs that is at least as strong; \code{domSLe\_sat} then transports satisfaction,
+$c$ holds $\Rightarrow d$ holds. \code{sameSLe}/\code{sameSLe\_sat} is the symmetric
+order-insensitive row-equality used when matching a certificate row to a known one.
+
+\subsection{Branch-and-bound case-splits (\code{uns})}\label{sec:calc-uns}
+This is the rule that makes the checker a \emph{MIP} checker rather than an LP one, and
+the one the knapsack needs. A \code{uns} step takes two earlier rows $i_1,i_2$ (each
+dominating the stated row) and two earlier bound-rows $l_1,l_2$ that are
+\emph{complementary integer bounds} on the same integer-valued form:
+$l_1:\ f\le\beta$ and $l_2:\ f\ge\beta{+}1$ with $\beta\in\Z$. It discharges $l_1,l_2$.
+Soundness has two ingredients.
+
+\begin{lemma}[integer split, \code{int\_split} / \code{intFormSplit}]\label{lem:split}
+If $f(a)\in\Z$ and $\beta\in\Z$, then $f(a)\le\beta$ or $\beta{+}1\le f(a)$.
+\end{lemma}
+This is just $\Z$'s discreteness (no integer strictly between $\beta$ and $\beta{+}1$),
+cast to $\Q$; \code{unsBounds\_split} extracts $\beta$ and the form from the two bound
+rows and applies it.
+
+\begin{lemma}[discharge, in \code{sfreplay\_holds}, \code{uns} case]\label{lem:uns}
+Suppose each branch row $i_k$ holds \emph{whenever} its bound $l_k$ holds (together with
+the other still-open assumptions). Then the stated row holds \emph{unconditionally} of
+$l_1,l_2$.
+\end{lemma}
+\begin{proof}
+Take the split (Lemma~\ref{lem:split}). If $f(a)\le\beta$, bound $l_1$ holds, so branch
+$i_1$ holds, so (by domination, \S\ref{sec:calc-dom}) the stated row holds. If
+$\beta{+}1\le f(a)$, bound $l_2$ holds, so $i_2$, so the stated row. Either way the stated
+row holds, with $l_1,l_2$ no longer needed. \qed
+\end{proof}
+
+Tracking ``whenever its bound holds'' is what the replay's assumption sets do
+(\S\ref{sec:replay}): each derived row carries the set of assumptions it still depends on,
+and a \code{uns} entry's assumptions are those of $i_1$ minus $l_1$, plus those of $i_2$
+minus $l_2$. \emph{In the knapsack}, \code{UnsplitNode1\_39} discharges \code{A9}/\code{A10}
+(the $y\le0$/$y\ge1$ split), leaving the global $0\ge1$ resting on nothing.
+
+%===============================================================================
+\section{The replay and its soundness}\label{sec:replay}
+
+The checker consumes the \code{DER} list \emph{as given}---a flat, index-referenced
+sequence---with no reshaping into a tree (contrast this with modelling a proof as a tree,
+which needs an untrusted flat-to-tree converter). It maintains a \emph{pool}: a list of
+pairs $(\text{row},\ \text{open-assumptions})$, indexed so that a \vipr{} index resolves
+to a pool entry (\code{CON} rows first with no assumptions, then each derivation). For a
+step, \code{sentryOf} computes the new entry (its row is the stated row; its assumptions
+are the union for \code{lin}/\code{rnd}, or the discharged set for \code{uns}, or the
+singleton $\{$row$\}$ for \code{asm}), and \code{svalidB} checks the reason
+(\S\ref{sec:calculus}). \code{sfreplay}/\code{sfvalidB} fold this over the list.
+
+\begin{theorem}[replay invariant, \code{sfreplay\_holds}]\label{thm:replay}
+If every step validates and every current pool entry ``holds'' at an integer-feasible
+assignment $a$, then every entry of the replayed pool holds at $a$---where
+``$(c,S)$ holds'' means: if $a$ satisfies the base (\code{CON}) rows and every assumption
+in $S$, then $a$ satisfies $c$.
+\end{theorem}
+\begin{proof}
+Induction over the step list. \code{asm} stores its own row as its assumption
+(trivial). \code{lin}/\code{rnd}: the referenced pool rows hold (induction hypothesis)
+because their assumptions are contained in the new entry's union; then
+\code{linCheck\_sound}/\code{rndCheck\_sound} (\S\ref{sec:calc-lin}--\ref{sec:calc-rnd})
+discharge the stated row. \code{uns}: Lemma~\ref{lem:uns}, with the two branches'
+assumption sets threaded exactly as \code{sentryOf} records them. \qed
+\end{proof}
+
+Acceptance closes the loop. \code{absurdB} recognizes an absurdity; the checker accepts
+iff the replay validates and the \emph{last} entry is an absurdity with \emph{empty}
+assumptions.
+
+\begin{theorem}[core soundness, \code{checkSemCore\_sound}]\label{thm:core}
+If \code{checkSemCore} accepts base rows \code{base} with step list \code{steps}, then no
+assignment $a$ whose integer-declared variables are integral satisfies all of \code{base}.
+\end{theorem}
+\begin{proof}
+By Theorem~\ref{thm:replay} the final entry holds at any such $a$ satisfying
+\code{base}; but it is an absurdity with no open assumptions, hence \emph{unsatisfiable}
+(\code{absurd\_unsat})---contradiction. \qed
+\end{proof}
+
+Wrapping the parser gives the user-facing statement.
+
+\begin{theorem}[\code{checkSem\_sound}]\label{thm:main}
+For a parsed certificate $v$, if $\code{checkSem}\ v=\mathtt{true}$ then no assignment
+integral on $v$'s declared integer variables satisfies $v$'s \code{CON} rows---i.e.\ the
+certified system is infeasible over the integers.
+\end{theorem}
+\code{checkSem} builds \code{base} from \code{conSLes} and the steps from the parsed
+\code{DER} reasons, then calls \code{checkSemCore}. \emph{On the knapsack, \code{checkSem}
+returns \code{true}}, so Theorem~\ref{thm:main} certifies~\eqref{eq:knap} has no integer
+solution.
+
+%===============================================================================
+\section{Trusted base and mechanization}\label{sec:tcb}
+
+Every result above is checked by the \lean{} kernel and is \emph{axiom-clean}:
+\code{\#print axioms checkSem\_sound} reports exactly \code{[propext,
+Classical.choice, Quot.sound]}---\lean{}/Mathlib's three standard axioms. There is no
+\code{native\_decide} (which would trust the compiler) and no \code{sorry}. The checker
+is a \code{Bool} function reduced by the kernel, so ``it accepts'' is itself a
+kernel-checked fact for a given certificate.
+
+\paragraph{What is trusted.} Only: (i) the \lean{} kernel; (ii) the meaning of
+``satisfies'' (\code{SLe.sat}, four lines) and ``infeasible'' (the conclusion of
+Theorem~\ref{thm:main}). \scip{} is \emph{untrusted}: it may search however it likes;
+its certificate is re-derived from scratch. A \scip{} bug can only produce a certificate
+the checker \emph{rejects}, never one it wrongly accepts. The certificate \emph{file} is
+untrusted (the parser is verified, \S\ref{sec:parser}).
+
+\paragraph{Size.} The checker and its soundness---exact arithmetic and Farkas core,
+the sensed-constraint calculus, the replay, and the parser---are about
+$1{,}800$ lines of \lean{}, small enough to audit, and dominated by proof rather than
+definition. The mathematics is elementary (monotonicity of multiplication, discreteness
+of $\Z$, a Farkas contradiction); the engineering is in doing it exactly and matching
+what a real solver emits.
+
+%===============================================================================
+\section{Evaluation}\label{sec:eval}
+
+We ran the checker on \emph{real} certificates from official exact \scip{}~10.0.1 (built
+with its exact rational mode and exact SoPlex LP solver). Table~\ref{tab:eval}
+summarizes; every certificate is genuine solver output, re-checked in exact~$\Q$ by
+Theorem~\ref{thm:main}.
+
+\paragraph{Branching (the running example).} The knapsack~\eqref{eq:knap} certificate has
+$32$ derivation steps: two assumptions (\code{asm}), twenty-one signed combinations
+(\code{lin}), eight Gomory cuts (\code{rnd}), and one case-split (\code{uns}). The
+checker accepts it. Tampering is caught: stripping the integrality declarations
+(\code{INT}) makes the checker \emph{reject} (the \code{rnd} and \code{uns} steps lose
+their justification)---as it must, since the LP relaxation \emph{is} feasible.
+
+\paragraph{A second, independent workload.} The checker is
+application-agnostic---nothing in it mentions its provenance. As an unrelated source of
+real certificates we used the per-branch systems generated by a neural-network verifier
+(each an exact-rational MILP over a network's ReLU pattern); their \scip{} certificates
+range from $97$ to $983$ steps and use \code{lin}+\code{rnd} (the encodings are small
+enough that \scip{} closes them with cuts, no branching). All are accepted.
+
+\begin{table}[t]
+\centering
+\caption{Real official-\scip{}-10.0.1 certificates re-checked by \code{checkSem}
+(exact~$\Q$, kernel-checked). ``reasons'' counts derivation steps by kind.}
+\label{tab:eval}
+\begin{tabular}{lrrrl}
+\toprule
+Certificate & \#vars & \#con & \#steps & reasons \\
+\midrule
+knapsack $6x{+}10y{+}15z{=}23$ (branch) & 3 & 8 & 32 &
+  \code{asm}$\times2$,\,\code{lin}$\times21$,\,\code{rnd}$\times8$,\,\code{uns}$\times1$ \\
+NN leaf $[-4]$          & 3 & 38 & 97  & \code{lin} \\
+NN leaf $[-2,4]$        & 2 & 35 & 273 & \code{lin},\,\code{rnd}$\times2$ \\
+NN leaf $[2,1,4]$       & 1 & 32 & 177 & \code{lin} \\
+NN leaf $[2,-1,4]$      & 1 & 32 & 983 & \code{lin},\,\code{rnd}$\times1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent(The ``\#vars'' column for the NN leaves counts \emph{integer} variables; each
+system has $16$ variables total.) These two very different workloads---textbook
+branch-and-bound and machine-learning verification---exercise the whole calculus on
+unmodified solver output.
+
+%===============================================================================
+\section{Related work}\label{sec:related}
+
+\paragraph{\vipr{} and exact MIP.} The \vipr{} format and its reference checker
+\code{viprchk} are due to Cheung, Gleixner and Steffy~\cite{vipr}; \code{viprchk} is an
+unverified C\texttt{++} program, and completing solver-emitted incomplete (cut)
+certificates uses \code{viprcomp}. Exact rational \scip{} and the branch-and-bound
+framework behind these certificates are due to Cook, Koch, Steffy, Wolter and to Eifler
+and Gleixner~\cite{eifler}; the exact mode is now part of official
+\scip~\cite{scip}. Our work replaces the trusted C\texttt{++} checker with a
+kernel-checked one, at the cost (so far) of covering \code{infeas} certificates without
+presolving/completion.
+
+\paragraph{Verified proof checking.} Verified checkers have transformed trust in SAT
+(GRAT, \code{cake\_lpr}, IsaSAT/DRAT~\cite{grat,cakelpr}) and in pseudo-Boolean/optimization
+reasoning (VeriPB / \code{CakePB}~\cite{veripb}). Term-rewriting and termination results
+are certified by \code{CeTA}/\code{IsaFoR}~\cite{ceta}. Exact-arithmetic LP duality and
+Farkas' lemma have been formalized in several proof assistants. To our knowledge this is
+the first kernel-checked checker for the \vipr{} \emph{MIP} certificate format, including
+the branch-and-bound case-split rule, run on real exact-\scip{} output.
+
+\paragraph{\lean{}.} We build on \lean~4 and Mathlib~\cite{mathlib} for exact rationals
+and elementary order/arithmetic lemmas.
+
+%===============================================================================
+\section{Conclusion and future work}\label{sec:concl}
+
+We have given a \vipr{} infeasibility-certificate checker whose soundness is proved by
+the \lean{} kernel, reasoning in exact rationals, implementing the full v1.0 calculus
+(signed suitable combinations, domination, Gomory rounding, and branch-and-bound
+case-splits), consuming the solver's flat derivation list directly, and validated on real
+official-\scip{} certificates including a genuinely branched proof. Future work: optimality
+and \code{RTP range} certificates (bounding the objective, not just infeasibility);
+verifying \emph{presolving} and supporting the v1.1 ``weak''/incomplete cut certificates
+via a (still untrusted) completion pass; a completeness argument (every well-formed
+certificate is accepted); and performance at the scale of hard MIP benchmarks.
+
+\begin{thebibliography}{9}
+\bibitem{vipr} K.\ K.\ H.\ Cheung, A.\ Gleixner, D.\ E.\ Steffy.
+  Verifying Integer Programming Results. IPCO 2017.
+\bibitem{eifler} L.\ Eifler, A.\ Gleixner.
+  A computational status update for exact rational mixed integer programming.
+  Mathematical Programming, 2022.
+\bibitem{scip} The SCIP Optimization Suite (exact rational solving mode). scipopt.org.
+\bibitem{grat} P.\ Lammich. Efficient verified (UN)SAT certificate checking (GRAT). CADE 2017.
+\bibitem{cakelpr} Y.\ K.\ Tan, M.\ J.\ H.\ Heule, M.\ O.\ Myreen. \code{cake\_lpr}: verified
+  propagation redundancy checking in CakeML. TACAS 2021.
+\bibitem{veripb} S.\ Gocht, C.\ McCreesh, J.\ Nordstr\"om, et al. Verified pseudo-Boolean
+  proof checking (VeriPB / CakePB).
+\bibitem{ceta} R.\ Thiemann, C.\ Sternagel. Certification of termination proofs using CeTA. TPHOLs 2009.
+\bibitem{mathlib} The mathlib Community. The Lean mathematical library. CPP 2020.
+\end{thebibliography}
+
+\end{document}
