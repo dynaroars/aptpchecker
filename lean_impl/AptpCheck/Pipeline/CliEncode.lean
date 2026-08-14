@@ -36,6 +36,7 @@ def encodeVerified (net : Network) (box : Array (ℚ × ℚ)) (leaf : List Int)
       let lo : Fin net.inDim → ℚ := fun i => (box.getD i.val (0, 0)).1
       let hi : Fin net.inDim → ℚ := fun i => (box.getD i.val (0, 0)).2
       let cc := fun k => c.getD k.val 0
-      some (Pipeline.boxRows lo hi ++ mlp.encRows 0 lo hi leaf 0, mlp.objRow 0 cc rhs, mlp.binIds 0)
+      some (Pipeline.boxRows lo hi ++ mlp.encFold 0 lo hi leaf 0, mlp.objRow 0 cc rhs,
+            mlp.encFoldBinIds 0 lo hi leaf 0)
 
 end AptpCheck.Model
