@@ -268,4 +268,52 @@ theorem encFold_overapprox {inD outD : ℕ} (net : MLP inD outD)
   · rw [net.objRow_eval 0 cc rhs (net.trace x)]
     exact Finset.sum_congr rfl (fun k _ => by rw [hout k])
 
+/-! ## Integrality of the referenced binary ids
+
+Every id `encFold` references a binary variable for (i.e. every id in `encFoldBinIds`)
+carries a genuine `binAct` value in the real trace, which is `0` or `1` — hence integral.
+This certifies that the reduced MILP's integer-variable set is sound: those variables
+really do take integer values at the real trace. -/
+
+/-- **Core induction (binary integrality).** Under agreement, the abstract valuation is
+integer-valued (indeed `∈ {0,1}`) on every id in `encFoldBinIds`. -/
+lemma MLP.encFoldBinIds_int_core {inD outD : ℕ} (net : MLP inD outD) :
+    ∀ (inBase : ℕ) (inLo inHi : Fin inD → ℚ) (L : List Int) (gid0 : ℕ)
+      (xv : Fin inD → ℚ) (a : Valuation),
+      net.Agree inBase xv a →
+      ∀ id ∈ net.encFoldBinIds inBase inLo inHi L gid0, IsIntVal (a id) := by
+  induction net with
+  | last W b =>
+      intro inBase inLo inHi L gid0 xv a _hag id hid
+      simp only [MLP.encFoldBinIds] at hid
+      exact absurd hid (by simp)
+  | @cons inD hidD outD W b rest ih =>
+      intro inBase inLo inHi L gid0 xv a hag id hid
+      simp only [MLP.encFoldBinIds, List.mem_append, List.mem_flatMap, List.mem_finRange,
+        true_and] at hid
+      rcases hid with ⟨i, hid⟩ | hid
+      · by_cases h1 : 0 ≤ lbAff W b inLo inHi i ∨ (↑(gid0 + i.val + 1) : Int) ∈ L
+        · rw [if_pos h1] at hid; exact absurd hid (by simp)
+        · rw [if_neg h1] at hid
+          by_cases h2 : ubAff W b inLo inHi i ≤ 0 ∨ (-(↑(gid0 + i.val + 1)) : Int) ∈ L
+          · rw [if_pos h2] at hid; exact absurd hid (by simp)
+          · rw [if_neg h2, List.mem_singleton] at hid
+            subst hid
+            rw [hag.consBin i]
+            simp only [binAct]
+            by_cases hp : 0 ≤ preAct W b xv i
+            · rw [if_pos hp]; exact ⟨1, by norm_num⟩
+            · rw [if_neg hp]; exact ⟨0, by norm_num⟩
+      · exact ih (inBase + inD + hidD + hidD)
+          (fun i => max (lbAff W b inLo inHi i) 0) (fun i => max (ubAff W b inLo inHi i) 0)
+          L (gid0 + hidD) (postAct W b xv) a hag.rest id hid
+
+/-- **Binary integrality for the real trace.** Every binary id that `encFold` references
+holds an integer value in the real trace `net.trace x` (in fact its `binAct`, which is
+`0`/`1`). This is the hypothesis the VIPR/MILP integer-variable interface needs. -/
+theorem encFold_binIds_int {inD outD : ℕ} (net : MLP inD outD)
+    (lo hi : Fin inD → ℚ) (L : List Int) (x : Fin inD → ℚ) :
+    ∀ id ∈ net.encFoldBinIds 0 lo hi L 0, IsIntVal (net.trace x id) :=
+  net.encFoldBinIds_int_core 0 lo hi L 0 x (net.trace x) (net.agree_trace x)
+
 end AptpCheck.Model
