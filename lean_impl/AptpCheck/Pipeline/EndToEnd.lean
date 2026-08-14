@@ -149,4 +149,55 @@ theorem leafCheck_sound {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD →
       · show LinForm.eval [⟨bid, 1⟩] (net.trace x) ≤ (1 : ℚ)
         simpa [LinForm.eval] using hb1
 
+/-! ## Assembly via coverage -/
+
+/-- **Whole-network certification.** Pair each leaf with its certificate (via `zip`),
+require the paired leaves to cover the activation cube, and check every pair with
+`leafCheck`. A length mismatch is handled conservatively: `zip` truncates to the shorter
+list, so coverage is demanded of exactly the leaves that actually received a certificate. -/
+def certifyMLP {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD → ℚ) (rhs : ℚ)
+    (lo hi : Fin inD → ℚ) (leaves : List (List Int)) (certs : List Vipr) : Bool :=
+  checkCoverage ((leaves.zip certs).map Prod.fst)
+  && (leaves.zip certs).all (fun p => leafCheck net cc rhs lo hi p.1 p.2)
+
+/-- **Soundness of whole-network certification (proof-side `MLP`).** If `certifyMLP`
+accepts, the property `c · net(x) > rhs` holds for every `x` in the input box. -/
+theorem certifyMLP_sound {inD outD : ℕ} (net : MLP inD outD) (cc : Fin outD → ℚ) (rhs : ℚ)
+    (lo hi : Fin inD → ℚ) (leaves : List (List Int)) (certs : List Vipr)
+    (h : certifyMLP net cc rhs lo hi leaves certs = true) :
+    ∀ x, (∀ j, lo j ≤ x j ∧ x j ≤ hi j) → rhs < ∑ k, cc k * net.eval x k := by
+  simp only [certifyMLP, Bool.and_eq_true] at h
+  obtain ⟨hcover, hall⟩ := h
+  intro x hx
+  refine certified_sound_abstract (Input := Fin inD → ℚ)
+    ((leaves.zip certs).map Prod.fst)
+    (fun z => ∀ j, lo j ≤ z j ∧ z j ≤ hi j)
+    (fun z => rhs < ∑ k, cc k * net.eval z k)
+    (fun z => net.trueSign z 0) hcover ?_ hx
+  -- refute obligation: each covered leaf has a checked certificate
+  intro leaf hleafmem y hymem hsat
+  obtain ⟨p, hp, hpfst⟩ := List.mem_map.mp hleafmem
+  have hlc : leafCheck net cc rhs lo hi p.1 p.2 = true := (List.all_eq_true.mp hall) p hp
+  have hcon : net.consistent 0 y p.1 :=
+    net.consistent_of_signMatch 0 y (net.trueSign y 0) p.1 (net.signMatch_trueSign y 0)
+      (by rw [hpfst]; exact hsat)
+  exact leafCheck_sound net cc rhs lo hi p.1 p.2 hlc y hymem hcon
+
+/-- **End-to-end soundness for a runnable `Network`.** If the network parses to the MLP
+normal form `r` and `certifyMLP` accepts, the property holds for the executable
+`Network.eval` on every input array whose entries lie in the box. -/
+theorem certify_network_sound (net : Network) (r : Σ outD : ℕ, MLP net.inDim outD)
+    (hconv : toMLP net = some r) (cc : Fin r.1 → ℚ) (rhs : ℚ)
+    (lo hi : Fin net.inDim → ℚ) (leaves : List (List Int)) (certs : List Vipr)
+    (x : Array ℚ)
+    (hx : ∀ j : Fin net.inDim, lo j ≤ x.getD j.val 0 ∧ x.getD j.val 0 ≤ hi j)
+    (h : certifyMLP r.2 cc rhs lo hi leaves certs = true) :
+    rhs < ∑ k : Fin r.1, cc k * (Network.eval net x).getD k.val 0 := by
+  have hsound := certifyMLP_sound r.2 cc rhs lo hi leaves certs h
+    (fun j => x.getD j.val 0) hx
+  rw [show (∑ k : Fin r.1, cc k * (Network.eval net x).getD k.val 0)
+        = ∑ k : Fin r.1, cc k * r.2.eval (fun j => x.getD j.val 0) k from
+      Finset.sum_congr rfl (fun k _ => by rw [toMLP_eval net r hconv x k])]
+  exact hsound
+
 end AptpCheck.Pipeline
