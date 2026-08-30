@@ -1,5 +1,5 @@
 name = "AptpCheck"
-defaultTargets = ["AptpCheck", "aptpcheck"]
+defaultTargets = ["AptpCheck", "aptpcheck", "viprcheck"]
 
 # A Lean 4 reimplementation of the APTPchecker DNN-verification proof checker.
 # Exact rational (ℚ) arithmetic throughout; SCIP is an untrusted oracle whose
@@ -21,3 +21,7 @@ name = "AptpCheck"
 [[lean_exe]]
 name = "aptpcheck"
 root = "Main"
+
+[[lean_exe]]
+name = "viprcheck"
+root = "ViprMain"
