@@ -31,7 +31,7 @@
 \newcommand{\lean}{\textsc{Lean\,4}}
 \newcommand{\mathlib}{\textsc{Mathlib}}
 \newcommand{\sound}{\textsf{certified}}
-\newcommand{\relu}{\mathrm{ReLU}}
+\newcommand{\relu}{\ensuremath{\mathrm{ReLU}}}
 \newcommand{\code}[1]{\texttt{#1}}
 
 \lstdefinestyle{lean}{
@@ -148,11 +148,12 @@ use of \code{native\_decide}, no floating point, and no trusted solver. Concrete
     theorem, and \emph{prove it for arbitrary-depth} feed-forward \relu{} MLPs: both
     cornerstones (big-$M$ ReLU soundness, interval-bound validity) and the full
     layer-induction assembly (\S\ref{sec:formalization}).
-  \item We \emph{verify both input parsers}---the exact network file and the
-    proof-tree file---by round-trip against printers, moving them out of the trusted
-    base; this required rewriting the parsers' \code{partial}/imperative loops as
-    total structural recursions without changing their behaviour
-    (\S\ref{sec:formalization}).
+  \item We prove round-trip theorems for both input parsers---the exact network
+    file and the proof-tree file; this required rewriting their
+    \code{partial}/imperative loops as total structural recursions without changing
+    their behaviour (\S\ref{sec:formalization}). The current concrete proof artifact
+    certifies emitted ASTs; kernel-checking their binding to arbitrary source text is
+    a deferred frontend concern.
   \item We describe the exact-rational substrate, the bit-exact float-to-rational
     weight decoding, and the trusted computing base
     (\S\ref{sec:formalization}--\ref{sec:implementation}), and evaluate on APTP
@@ -482,9 +483,11 @@ correspondence to the leaf's encoding. The console output:
 \begin{tabular}{l}
 \texttt{Coverage: OK (leaves tile the activation-pattern cube)}\\
 \texttt{Objective 0: c=[1, -1], rhs=0}\\
-\texttt{~~leaf 0: CERTIFIED (verified leafCheck: cert validated + matches this leaf's encoding)}\\
-\texttt{~~leaf 1: CERTIFIED \dots\quad leaf 2: CERTIFIED\quad leaf 3: CERTIFIED}\\
-\texttt{CERTIFIED: $\forall$ x $\in$ dom, c $\cdot$ net(x) > $\rho$}\\
+\texttt{~~leaf 0: native precheck OK; sliced 38 -> 8 constraints, 97 -> 13 steps}\\
+\texttt{~~leaf 1: native precheck OK; sliced 35 -> 17 constraints, 273 -> 72 steps}\\
+\texttt{~~leaf 2: native precheck OK; sliced 32 -> 12 constraints, 177 -> 11 steps}\\
+\texttt{~~leaf 3: native precheck OK; sliced 32 -> 18 constraints, 983 -> 281 steps}\\
+\texttt{KERNEL-CHECKED: theorem AptpCheck.Generated.certified}\\
 \end{tabular}
 \end{center}
 The four certificates \scip{} produced are real solver output, not hand-written: over
@@ -493,8 +496,10 @@ derivation steps respectively; two leaves additionally use Gomory rounding cuts
 (\code{rnd} steps) alongside the signed-multiplier combinations (\code{lin}). The
 leaf-aware encoding is directly visible in the integer-variable counts: leaves
 $\leaf_1,\dots,\leaf_4$ declare $3,2,1,1$ integers --- exactly the neurons each leaf
-leaves unfixed. All four certificates are accepted by the kernel-checked checker
-(\S\ref{sec:certificates}), so the tool's verdict is precisely the hypothesis of
+leaves unfixed. The driver backward-slices the four certificates to the rows needed
+by their final contradictions, and the kernel-checked checker accepts those slices
+(\S\ref{sec:certificates}); slicing is untrusted and therefore cannot create an
+accepting proof. The tool's verdict is precisely the hypothesis of
 \code{certify\_network\_sound}. On this network the leaf-aware encoding keeps each MILP
 small enough that exact \scip{} proves every leaf with signed combinations and Gomory
 cuts alone --- no branching --- which is why these certificates use only \code{lin} and
@@ -676,11 +681,15 @@ check (Lemma~\ref{lem:cover}) and per-leaf refutation (Lemma~\ref{lem:leaf}).}
 \label{fig:thm}
 \end{figure}
 
-\paragraph{Reflective checkers.} Each check---Farkas step, rounding, unsplit,
-coverage---is a \code{Bool}-valued function proved to imply its semantic
-consequence (\emph{soundness lemma}), then \emph{evaluated by the kernel} on concrete
-rationals. We deliberately avoid \code{native\_decide}: acceptance is a kernel
-reduction, so the compiler and runtime stay out of the trusted base.
+\paragraph{Reflective checkers and reconstruction.} Each check---Farkas step,
+rounding, unsplit, coverage---is a \code{Bool}-valued function proved to imply its
+semantic consequence (\emph{soundness lemma}). Concrete certificate replay is
+evaluated by the kernel in generated modules. Medium and large leaves remain in
+separate processes to bound peak memory; up to two tiny leaves are fused into the
+final module to amortize process and import overhead. That final module also
+reconstructs the original whole-bundle Boolean acceptance from the leaf facts.
+We deliberately avoid \code{native\_decide}: semantic acceptance is checked by
+kernel reduction rather than trusted from the compiled CLI.
 
 \paragraph{Mechanization status.} Everything reported in this section is
 machine-checked and \emph{axiom-clean} (depending only on \code{propext},
@@ -742,7 +751,11 @@ sample). The \code{.aptp} proof-tree reader is verified the same way
 (\code{parseAptp\_printAptp}), which additionally required de-\code{partial}-izing the
 S-expression parser and rewriting the two-pass \code{parseAptp} loops as total
 \code{List.foldl}s (behaviour-preserving; regression-checked on both sample proofs).
-\textbf{Both} parsers are thus out of the trusted base.
+\textbf{Both} parsers therefore have machine-checked round-trip guarantees. The
+current performance-oriented generated artifact is stated over emitted
+\code{Network}/\code{Problem} ASTs rather than kernel-normalizing the parsers on the
+complete source files; consequently the concrete text-to-AST binding remains a
+frontend trust boundary.
 
 The soundness is also bridged to the \emph{executable} side: \code{toMLP} converts a
 parsed \code{Array}-based \code{Network} (the MLP normal form) to the
@@ -760,21 +773,23 @@ binary's $[0,1]$ bound), and the declared integer variables are the encoder's bi
 correspondence is checked up to the solver's variable renumbering (undone, untrusted,
 from the certificate's own variable names) and term reordering (the proven
 order-insensitive form equality); the true-sign vector \code{MLP.trueSign} with
-\code{signMatch\_trueSign} supplies the coverage side. The CLI computes exactly this
-hypothesis, so its \sound{} verdict carries the theorem's conclusion; trusted beyond
-Lean's kernel are only the OS/file-I/O glue and \code{main}'s conjunction of the
-per-leaf verdicts.
+\code{signMatch\_trueSign} supplies the coverage side. For each run the CLI emits
+kernel-checked per-leaf facts and a \code{BundleNetEvidence} proof; the proved
+\code{bundleNetEvidence\_iff} theorem shows this evidence is equivalent to the
+original \code{checkBundleAst} acceptance condition, and the final theorem derives
+the network property without trusting \code{main}'s machine Boolean.
 
 Remaining, and none requiring trust in \scip{} or floats: Conv/CNN encoding (future
 work).
 
-\paragraph{Trusted computing base.} The TCB is: the \lean{} kernel and $\Q$
-arithmetic, and the \code{.net} file faithfully representing the intended network (its
-generation is out of scope---the tool reads only the exact format). \textbf{Both}
-input parsers---the network file and the proof-tree file---are now \emph{fully
-verified} (\code{parseNet\_printNet}, \code{parseAptp\_printAptp}) and out of the TCB.
-\scip, SoPlex, the \vipr{} certificate, and any certificate-completion tooling are
-\emph{not} trusted.
+\paragraph{Trusted computing base.} Relative to the emitted ASTs, the TCB is the
+\lean{} kernel and $\Q$ arithmetic. \scip, SoPlex, the \vipr{} certificate,
+certificate slicing, and certificate-completion tooling are \emph{not} trusted.
+For the stronger claim about the exact input bytes, the current CLI parser,
+compiler/runtime, and OS/file-I/O remain a frontend TCB: although
+\code{parseNet\_printNet} and \code{parseAptp\_printAptp} prove round trips,
+the generated proof does not yet kernel-check the concrete source-text-to-AST
+equalities.
 
 \section{Design rationale: why each step is needed}\label{sec:rationale}
 
@@ -856,8 +871,9 @@ both the architecture and where the proof effort concentrates.
 
   \item[Why kernel checking, not \code{native\_decide}.] \code{native\_decide} would
     add the Lean compiler and runtime to the trusted base---unacceptable for a tool
-    whose entire purpose is a small trusted base. Every check is a reflective
-    \code{Bool} function evaluated by the kernel, so acceptance is a kernel reduction.
+    whose entire purpose is a small trusted base. Expensive leaf checks are reflective
+    \code{Bool} functions evaluated by the kernel, and the whole checker result is
+    reconstructed from those kernel-checked facts.
     (The one representation friction---the executable network uses \code{Array} while
     proofs use \code{Fin}/\code{Finset} sums---is bridged with \code{List.ofFn} and
     \code{sum\_ofFn}, keeping the assembly proof kernel-friendly.)
@@ -879,9 +895,10 @@ runnable \code{checkRefTree}); the \code{Network}$\to$\code{MLP} bridge transpor
 network (\code{Model/NetworkMLP}); and the composition scaffolding plus the VIPR
 endpoint (\code{Pipeline/Compose}, \code{Pipeline/Affine}, \code{Pipeline/ViprCheck}).
 The command-line driver \code{aptpcheck N.net P.aptp [-{}-vipr-dir D/]} is assembled and
-runs end to end: it invokes exact \scip{} per leaf and validates each returned
-certificate with the verified \code{leafCheck}, so its \sound{} verdict is the
-hypothesis of \code{certify\_network\_sound} (\code{Pipeline/EndToEnd}); there is no
+runs end to end: it invokes exact \scip{} per leaf, backward-slices each returned
+certificate, emits isolated kernel-checking modules for medium and large leaves,
+fuses at most two tiny leaves into the final module, and reconstructs
+\code{checkBundleAst} there using \code{BundleNetEvidence}. There is no
 flat-to-tree conversion --- the checker consumes the solver's derivation list directly.
 Under construction: Conv/CNN. The proof format and neuron numbering match \pytool, so
 its proofs are consumed unchanged.
@@ -901,6 +918,14 @@ certificate families appear: signed combinations (\code{lin}), Gomory rounding c
 (\code{rnd}), and --- in the branching stress test --- assumptions and a case-split
 (\code{asm}/\code{uns}). Every certificate is genuine, untrusted solver output, re-checked
 in exact~$\Q$ by the verified checker.
+
+Backward slicing reduces the worked example from $137$ to $55$ base constraints
+and from $1{,}530$ to $377$ derivation steps. We do not use the whole APTP pipeline
+for the checker-performance comparison because it also measures network/property
+processing and proof assembly. The companion VIPR evaluation instead compares
+compiled and kernel replay on identical unsliced certificate files. The final
+axiom report contains only \code{propext}, \code{Classical.choice}, and
+\code{Quot.sound}.
 
 \begin{table}[t]
 \centering
@@ -968,12 +993,12 @@ and its \vipr{} certificate is re-checked in the kernel. The guarantee factors c
 into per-leaf refutation, coverage, and encoding soundness. Machine-checked and
 axiom-clean: encoding soundness for arbitrary-depth ReLU MLPs, a complete automatic
 proof-by-cases \vipr{} certificate checker (Farkas/rounding/split), the coverage
-check, both input parsers by round-trip (out of the trusted base), and a bridge that
-transports the soundness onto the executable, parsed network. What remains is
-engineering, not new trust: assembling the command-line driver (with an untrusted
-flat-\vipr{}-to-tree converter), and extending to convolutional and residual
-architectures at scale. We then target \emph{completeness} (via \mathlib's Farkas/LP
-duality) and parallel certificate checking.
+check, both input parsers by round-trip, and a bridge that transports soundness onto
+the executable network AST. The concrete CLI now produces partial proof
+reconstruction artifacts; remaining work includes kernel-checking the exact
+source-text-to-AST binding and extending to convolutional and residual architectures
+at scale. We then target \emph{completeness} (via \mathlib's Farkas/LP duality) and
+parallel certificate checking.
 
 \bibliographystyle{splncs04}
 \bibliography{references}
