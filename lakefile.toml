@@ -1,5 +1,5 @@
 name = "ViprCheck"
-defaultTargets = ["ViprCheck", "viprcheck"]
+defaultTargets = ["ViprCheck", "viprcheck", "viprcheck-manual"]
 
 [leanOptions]
 pp.unicode.fun = true
@@ -11,9 +11,24 @@ name = "mathlib"
 scope = "leanprover-community"
 rev = "v4.31.0"
 
+[[require]]
+name = "verso"
+git = "https://github.com/leanprover/verso.git"
+rev = "v4.31.0"
+
 [[lean_lib]]
 name = "ViprCheck"
 
 [[lean_exe]]
 name = "viprcheck"
 root = "ViprMain"
+
+[[lean_lib]]
+name = "ViprCheckManual"
+srcDir = "manual"
+
+[[lean_exe]]
+name = "viprcheck-manual"
+root = "ViprCheckManualMain"
+srcDir = "manual"
+supportInterpreter = true

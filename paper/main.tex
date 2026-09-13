@@ -425,6 +425,9 @@ Every result above is checked by the \lean{} kernel and is \emph{axiom-clean}:
 \code{\#print axioms checkSem\_sound} reports exactly \code{[propext,
 Classical.choice, Quot.sound]}---\lean{}/Mathlib's three standard axioms. There is no
 \code{native\_decide} (which would trust the compiler) and no \code{sorry}.
+\footnote{The anonymous artifact includes a Verso developer manual mapping the
+checker implementation to the main theorem chain, trust boundary, audit steps,
+and executable replay commands.}
 The normal \code{viprcheck} command emits the parsed certificate as Lean data and
 generates a theorem \code{checkSem cert = true}, discharged with
 \code{decide +kernel}. The compiled Boolean result is used only as an early precheck;

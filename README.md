@@ -27,6 +27,24 @@ lake build
 
 That produces `viprcheck`. SCIP is **not** required to check an existing `.vipr`.
 
+## Developer audit manual
+
+The anonymous developer manual maps the executable checker to its declarative
+proof system, main soundness theorems, termination and structural-cost results,
+kernel-replay path, and remaining trust boundaries. Build its multi-page HTML:
+
+```bash
+lake exe viprcheck-manual --output manual/_out
+```
+
+Serve the generated site locally:
+
+```bash
+python3 -m http.server 8000 --directory manual/_out/html-multi
+```
+
+The source is [`manual/ViprCheckManual.lean`](manual/ViprCheckManual.lean).
+
 ## Run the paper example (knapsack)
 
 The running example is the integer-infeasible knapsack
