@@ -1,0 +1,19 @@
+name = "ViprCheck"
+defaultTargets = ["ViprCheck", "viprcheck"]
+
+[leanOptions]
+pp.unicode.fun = true
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
+
+[[lean_lib]]
+name = "ViprCheck"
+
+[[lean_exe]]
+name = "viprcheck"
+root = "ViprMain"

@@ -1,0 +1,15 @@
+VER 1.0
+VAR 1
+x
+INT 0
+OBJ max
+1 0 1
+CON 2 0
+C0 L 1 1 0 1
+C1 G 0 1 0 1
+RTP range 1 1
+SOL 1
+opt 1 0 1
+DER 2
+D0 G 1 OBJ { sol } -1
+D1 L 1 OBJ { lin 1 0 1 } -1
