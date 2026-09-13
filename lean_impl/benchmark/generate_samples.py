@@ -2,9 +2,13 @@
 """Generate integer MILPs, run exact SCIP, keep only UNSAT VIPR pairs that branch.
 
 Pairs are named alike, e.g. prob1.mps / prob1.vipr. A pair is kept only if SCIP
-proves infeasibility and the certificate contains an `uns` (case-split). Instances
-are knapsack-like: the LP relaxation is feasible, the integer hull is empty, and
-gcd(weights)=1 so a single modular cut does not finish the proof.
+proves infeasibility, the certificate is complete VIPR **v1.0** (header `VER 1.0`,
+no `lin weak` / `lin incomplete` from v1.1), and it contains an `uns` (case-split).
+Instances are knapsack-like: the LP relaxation is feasible, the integer hull is
+empty, and gcd(weights)=1 so a single modular cut does not finish the proof.
+
+Separating is off so SCIP emits a complete v1.0 derivation instead of a v1.1
+incomplete/weak certificate that would need `viprcomp`.
 
 Run from lean_impl/benchmark/ (APTP_SCIP or --scip if `scip` is not on PATH):
 
@@ -187,6 +191,22 @@ def vipr_has_uns(text: str) -> bool:
     return "{ uns" in text
 
 
+def vipr_is_v10(text: str) -> bool:
+    """True iff the file is complete VIPR 1.0 (Lean's checker), not 1.1 weak/incomplete."""
+    head = text.lstrip()
+    if head.startswith("%"):
+        for line in text.splitlines():
+            s = line.strip()
+            if s and not s.startswith("%"):
+                head = s
+                break
+    if not head.startswith("VER 1.0"):
+        return False
+    if "{ lin weak" in text or "{ lin incomplete" in text or "{ rnd weak" in text:
+        return False
+    return True
+
+
 def run_scip(scip: str, mps: Path, vipr: Path, timeout: float) -> str:
     if vipr.exists():
         vipr.unlink()
@@ -238,7 +258,7 @@ def main() -> int:
     rng = random.Random(args.seed)
     print(
         f"scip={scip}  n_vars={args.n_vars}  n_constraints={args.n_constraints}  "
-        f"n_problems={args.n_problems}  seed={args.seed}  out={out_dir}  require=uns"
+        f"n_problems={args.n_problems}  seed={args.seed}  out={out_dir}  require=v1.0+uns"
     )
 
     kept = 0
@@ -260,10 +280,10 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 status = "timeout"
             text = vipr_text(vipr)
-            has_infeas, has_uns = vipr_is_infeas(text), vipr_has_uns(text)
+            has_infeas, has_uns, is_v10 = vipr_is_infeas(text), vipr_has_uns(text), vipr_is_v10(text)
             n_uns = text.count("{ uns")
-            print(f"  attempt {attempt}: {status}  infeas={has_infeas}  uns={n_uns}")
-            if not (status == "infeasible" and has_infeas and has_uns):
+            print(f"  attempt {attempt}: {status}  v10={is_v10}  infeas={has_infeas}  uns={n_uns}")
+            if not (status == "infeasible" and is_v10 and has_infeas and has_uns):
                 continue
             kept += 1
             dest_mps = out_dir / f"prob{kept}.mps"
