@@ -59,11 +59,6 @@
 \newcommand{\eval}{\mathrm{eval}}
 
 
-\newtoggle{usecomment}
-\settoggle{usecomment}{false}
-\newcommand{\hd}[1]{\iftoggle{usecomment}{{\color{blue}{[HD]: #1}}}{}}
-\newcommand{\tvn}[1]{\iftoggle{usecomment}{{\color{red}{[TVN]: #1}}}{}}
-
 % Autoref
 \renewcommand{\figurename}{Fig.}
 \renewcommand{\tablename}{Tab.}
@@ -94,10 +89,8 @@
 
 \begin{abstract}
   To establish trust in mixed-integer programming (MIP), modern solvers, e.g., \scip{}, can emit \vipr{} certificates for infeasibility and objective-range results.
-  \tvn{So other formats have provable checkers?}\hd{revised}
   These certificates make solver results independently checkable and capture the proof steps produced by a practical, general-purpose MIP solver.
   However, the \vipr{} reference checker is an unverified C\texttt{++} program, so an implementation error could cause it to accept an invalid certificate.
-  \tvn{why VIPR being the focus here?}\hd{revised}
 
   We present \tool{}, a \vipr{} checker implemented and formally verified in \textsc{Lean\,4}.
   We formalize the semantics and soundness of the \vipr{} proof system, including linear combination, integer rounding, assumptions, and branch closure, and prove that \tool{} is sound and terminating.
@@ -118,7 +111,6 @@ The Verifying Integer Programming Results (\vipr{}) format provides such certifi
 A \vipr{} certificate lists constraints in order, with each derived constraint citing earlier constraints and the rule used to derive it.
 Its rules cover exact linear combinations, integer rounding, and branch-and-bound case splits, and exact \scip{} can produce the certificates~\citep{cheung2017verifying,eifler2023computational}.
 This makes \vipr{} a practical interface between a full MIP solver and a smaller independent checker.
-\tvn{this whole work is about checking results in VIPR format so motivate VIPR a bit more. You're making assumption people already know (and care) about VIPR}\hd{added}
 
 The original \vipr{} work defines the format, justifies its rules mathematically, integrates certificate production into exact \scip{}, and implements the C\texttt{++} reference checker \textsc{ViprChk}~\citep{cheung2017verifying}.
 Checking with \textsc{ViprChk} reduces the amount of trusted code relative to trusting \scip{}, but neither the checker implementation nor the soundness arguments for its rules are machine-checked.
@@ -131,28 +123,20 @@ In this work, we implement \tool{}, an executable \vipr{} checker in
 \textsc{Lean\,4}\footnote{Hereafter, we refer to \textsc{Lean\,4} simply as \textsc{Lean}.}.
 We connect its acceptance of a certificate to a machine-checked proof of the claimed MIP result: infeasibility, or feasibility of the listed solutions together with validity of the reported objective range.
 Note that we do not verify the solver or the full \vipr{} toolchain.
-\tvn{What does the formal semantics and executable checker have to do with any of these? Becareful of overclaiming what this paper is about}\hd{revised}
 Following formally verified certificate checkers for SAT and pseudo-Boolean reasoning~\citep{szeider2026lrat,szeider2026pblean}, we formalize both \tool{}'s executable replay and its soundness proof in \lean{}~\citep{moura2021lean}.\footnote{The source code is available at \url{https://anonymous.4open.science/r/VIPR-Lean/}}
-\tvn{this paragraph seems confusing. Make it simpler -- basically based on what this paper is presenting and showing that what is missing}\hd{revised}
 
 Given a parsed \vipr{} certificate, \tool{} uses exact rational numbers to replay its derivation steps in order while tracking the branch assumptions behind each constraint.
 During replay, \code{asm} opens a branch assumption, \code{lin} checks a signed linear combination, \code{rnd} checks integer rounding, and \code{uns} joins complementary branches and removes their assumptions.
 If a rule check fails, \tool{} rejects the certificate.
 For an infeasibility certificate, \tool{} accepts only if the final constraint is impossible, such as $0\le-1$, and has no open branch assumptions.
 For an objective-range certificate, it additionally checks the listed solution witnesses and the closed derived bound on the objective.
-\tvn{the readers won't know what these lin, rnd, uns entries are}\hd{added}
 
-\tvn{I think you should add a couple of sentences that VILean is a NEW checker implemented from scratch (if true) in Lean. Talk a bit about its main features or what it does.  And then talk about the formal guarantees as below.}
 We prove in \lean{} that each rule check preserves validity for real assignments satisfying the declared integrality conditions and current branch assumptions.
 Applying these proofs step by step, we show that each derived constraint is implied by the original MIP constraints and the branch assumptions on which it depends.
 This invariant yields our main soundness theorem: if \tool{} accepts an infeasibility certificate, no real assignment satisfying the declared integrality conditions can satisfy the original MIP constraints; if it accepts an objective-range certificate, every listed solution is feasible and every optimal objective value lies in the reported range.
 The theorem applies directly to the executable checker's Boolean result, connecting successful replay to the claimed MIP result.
 To reduce replay cost for infeasibility certificates, \tool{} retains only the constraints and derivation steps needed for the final contradiction.
 We prove that acceptance of this sliced certificate soundly refutes the original MIP.
-\tvn{expand this -- you spent paragraphs on unclear motivation and only a short one---even shorter than what's given in the abstract---on what this paper is actually is about.  Expand it and also make it easier to understand.}
-\hd{expanded}
-
-\hd{missing results}
 
 Our contributions are:
 \begin{itemize}
@@ -160,10 +144,6 @@ Our contributions are:
 \item A sound and terminating executable \vipr{} checker for infeasibility and objective-range certificates.
 \item A backward-slicing optimization for infeasibility certificates, with a proof that acceptance of the slice establishes infeasibility of the original MIP.
 \end{itemize}
-
-\tvn{didn't you also implement the checker itself in Lean?  it's not clearly mentioned -- probably in item 2 above but the wording doesn't make it clear.  Tell AI to use simpler language}\hd{revise}
-
-\tvn{this is the first time soundness theorem mentioned}\hd{mentioned above}
 
 %===============================================================================
 \section{Background and Example}\label{sec:background}
@@ -570,9 +550,7 @@ replay remains future work.
 
 %===============================================================================
 \section{Related Work}\label{sec:related}
-\tvn{for a 4 page-workshop, you probably don't need this, instead of incorporate the most RELATED one directly into the intro itself}
 \paragraph{MIP certificate checking.}
-\hd{keep it for now, we can remove it later}
 
 \citet{cheung2017verifying} introduced \vipr{}, certificate support in exact \scip{}, and the C\texttt{++} checker \textsc{ViprChk}.
 Closest to our work, \citet{wood2025satisfiability} formalize \vipr{} validity in \textsc{Why3}~\citep{filliatre2013why3} and relate it to a ground linear integer-real arithmetic formula, while a separate C\texttt{++} frontend emits SMT-LIB for \textsc{Cvc5}~\citep{barrett2010smt,barbosa2022cvc5}.
@@ -602,6 +580,14 @@ Future work will investigate completeness of the \vipr{} proof system,
 formalize the checker's algorithmic complexity, verify the \vipr{} parser to
 remove it from the trusted base, and scale kernel-only replay and evaluation to
 larger certificates.
+
+\paragraph{AI assistance disclosure.}
+An LLM-based coding assistant was used during development to assist with
+\lean{} implementation and proof engineering, benchmark scripting, and
+manuscript editing. The assistant is not part of \tool{} or its trusted base.
+All resulting code and proofs were reviewed by the authors, the formal
+development was checked by \lean{}, and the authors take responsibility for
+the paper and artifact.
 
 \bibliographystyle{plainnat}
 \bibliography{main}

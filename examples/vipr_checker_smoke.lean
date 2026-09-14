@@ -10,7 +10,6 @@ literature: an invalid `{ sol }` direction and a missing final dual-bound row.
 
 open LeanVIPR.Ast LeanVIPR.Cert LeanVIPR.Ast.Vipr
 open LeanVIPR.Cert.ViprChecker
-open LeanVIPR.Cert.ViprComplexity
 
 def xForm : LinForm := [⟨0, 1⟩]
 
@@ -121,17 +120,3 @@ example : Vipr.ClaimValid minRangeCert :=
 
 example : Vipr.ClaimValid maxRangeCert :=
   checkVipr_sound maxRangeCert (by decide +kernel)
-
-/-! The structural cost profile preserves the checker result and accounts for
-both infeasibility and range certificates. -/
-
-example : (checkViprProfiled minRangeCert).1 = true := by decide +kernel
-example : (checkerWorkUpper minRangeCert).ruleChecks = 2 := by decide +kernel
-example : 0 < (checkerWorkUpper minRangeCert).solutionInputCells := by decide +kernel
-
-example : (checkViprProfiled simpleInfeasCert).1 = true := by decide +kernel
-example : (checkerWorkUpper simpleInfeasCert).ruleChecks = 1 := by decide +kernel
-example : (checkerWorkUpper simpleInfeasCert).solutionInputCells = 0 := by decide +kernel
-
-example := checkVipr_structural_cost minRangeCert
-example := checkVipr_structural_cost simpleInfeasCert
