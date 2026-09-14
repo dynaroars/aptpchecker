@@ -1,4 +1,4 @@
-# VIPR checker slides
+# LeanVIPR slides
 
 Build the Beamer deck with:
 

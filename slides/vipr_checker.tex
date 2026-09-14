@@ -39,8 +39,8 @@
 \newcommand{\lean}{\textsc{Lean 4}}
 \newcommand{\code}[1]{\texttt{#1}}
 
-\title{VIPR (\emph{Verifying Integer Programming Results})\\
-Proof Certificates and a Kernel-Checked Lean Verifier}
+\title{LeanVIPR\\
+A Formally Verified Certificate Checker for Exact Mixed-Integer Programming}
 \author{}
 \date{September 2026}
 
@@ -336,35 +336,38 @@ theorem rndCheck_sound {intVars stated cs}
 \begin{frame}[fragile]{Main soundness chain}
   \begin{center}
   \begin{tikzpicture}[
-      node distance=0.25cm,
+      scale=0.88,transform shape,
+      node distance=0.18cm,
       thm/.style={draw,rounded corners,minimum width=5.6cm,minimum height=0.54cm,
                   align=center,fill=leanblue!8},
       arr/.style={-{Latex[length=2mm]},thick}
     ]
-    \node[thm] (rules) {\code{linCheck\_sound}, \code{rndCheck\_sound},
-                       \code{unsBounds\_split}};
-    \node[thm,below=of rules] (replay) {\code{sfreplay\_holds}: replay preserves the invariant};
-    \node[thm,below=of replay] (inf) {\code{sem\_infeasible}: closed absurdity refutes the base};
-    \node[thm,below=of inf] (core) {\code{checkSemCore\_sound}};
-    \node[thm,below=of core,fill=proofgreen!12] (top) {\code{checkSem\_sound}};
-    \draw[arr] (rules) -- (replay);
-    \draw[arr] (replay) -- (inf);
-    \draw[arr] (inf) -- (core);
-    \draw[arr] (core) -- (top);
+    \node[thm] (rules) {\code{linCheck\_valid\_real}, \code{rndCheck\_valid\_real},
+                       \code{unsBoundsB\_valid\_real}};
+    \node[thm,below=of rules] (step) {\code{stepValidB\_sound}};
+    \node[thm,below=of step] (refine)
+      {\code{checkVipr\_refines}: acceptance implies \code{Vipr.ProofValid}};
+    \node[thm,below=of refine] (system)
+      {\code{Vipr.proofSystem\_sound}: validity implies claim validity};
+    \node[thm,below=of system,fill=proofgreen!12] (top)
+      {\code{checkVipr\_sound}: production checker};
+    \draw[arr] (rules) -- (step);
+    \draw[arr] (step) -- (refine);
+    \draw[arr] (refine) -- (system);
+    \draw[arr] (system) -- (top);
   \end{tikzpicture}
   \end{center}
 
 \vspace{-0.35em}
 \begin{lstlisting}
-theorem checkSem_sound (v : Vipr) (h : checkSem v = true) :
-  forall a,
-    (forall j in v.intVars, IsIntVal (a j)) ->
-    (forall c in conSLes v, SLe.sat c a) ->
-    False
+theorem checkVipr_sound
+    (v : Vipr)
+    (h : checkVipr v = true) :
+  Vipr.ClaimValid v
 \end{lstlisting}
 
-  Acceptance therefore means that the certificate's own \code{CON} system is
-  infeasible over its declared integer variables.
+  For \code{RTP infeas}, no feasible mixed-integer valuation exists.
+  For \code{RTP range}, the checked objective-range result is correct.
 \end{frame}
 
 \begin{frame}[fragile]{Highlight: verified checker $\neq$ certified run}
@@ -372,25 +375,25 @@ theorem checkSem_sound (v : Vipr) (h : checkSem v = true) :
     \begin{column}{0.47\textwidth}
       \begin{alertblock}{Compiled CLI}
 \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
-if checkSem cert then
+if checkVipr cert then
   IO.println "ACCEPT"
 else
   IO.println "REJECT"
 \end{lstlisting}
         \footnotesize
         This returns a machine Boolean. Trusting ``ACCEPT'' also trusts the
-        compiled execution of \code{checkSem}, its runtime, and the CLI path.
+        compiled execution of \code{checkVipr}, its runtime, and the CLI path.
       \end{alertblock}
     \end{column}
     \begin{column}{0.49\textwidth}
       \begin{block}{Kernel reflection}
 \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
 theorem accepted :
-    checkSem cert = true := by
+    checkVipr cert = true := by
   decide +kernel
 
-theorem infeasible :=
-  checkSem_sound cert accepted
+theorem certified : Vipr.ClaimValid cert :=
+  checkVipr_sound cert accepted
 \end{lstlisting}
         \footnotesize
         The kernel evaluates this concrete check and validates the proof term.
@@ -403,9 +406,9 @@ theorem infeasible :=
     \footnotesize
     \begin{tabular}{@{}p{0.25\textwidth}@{\quad}p{0.65\textwidth}@{}}
       \textbf{Checker soundness} &
-      If \code{checkSem v = true}, then the represented system is infeasible.\\[0.35em]
+      If \code{checkVipr v = true}, then \code{Vipr.ClaimValid v}.\\[0.35em]
       \textbf{Certified run} &
-      The kernel has proved \code{checkSem cert = true} for this certificate.
+      The kernel has proved \code{checkVipr cert = true} for this certificate.
     \end{tabular}
   \end{block}
 
@@ -416,7 +419,8 @@ theorem infeasible :=
 
 \begin{frame}[fragile]{Concrete certificates are checked by kernel reduction}
 \begin{lstlisting}[basicstyle=\ttfamily\tiny]
-theorem acceptedSlice : checkSem sliced = true := by
+theorem acceptedSlice :
+    checkVipr sliced = true := by
   decide +kernel
 
 theorem certified :
@@ -424,8 +428,9 @@ theorem certified :
       (forall j in original.intVars, IsIntVal (a j)) ->
       (forall c in conSLes original, SLe.sat c a) ->
       False :=
-  checkSem_subset_sound
-    original sliced sameIntVars rowsSubset acceptedSlice
+  checkViprInfeasibleSubset_sound
+    original sliced slicedInfeas
+    sameIntVars rowsSubset acceptedSlice
 \end{lstlisting}
 
   \begin{columns}[T]
@@ -452,33 +457,33 @@ theorem certified :
   reducing kernel replay from about 182 seconds to 40 seconds.
 \end{frame}
 
-\begin{frame}{VIPR-only benchmark: list replay and reconstruction}
+\begin{frame}{Compiled benchmark: optimized full replay and slicing}
   \scriptsize
   \begin{center}
-  \begin{tabular}{@{}lrrrrr@{}}
+  \begin{tabular}{@{}lrrrr@{}}
     \toprule
-    Certificate & KiB & steps & compiled & full list & reconstructed \\
+    Family & files & C\texttt{++} & Lean full & Lean sliced \\
     \midrule
-    knapsack & 1.99 & $32\to23$ & 0.04 & 22.98 & 22.61 \\
-    NN leaf $[-4]$ & 7.54 & $97\to13$ & 0.04 & 28.62 & 24.10 \\
-    NN leaf $[-2,4]$ & 22.43 & $273\to72$ & 0.05 & 28.13 & 24.99 \\
-    NN leaf $[2,1,4]$ & 16.13 & $177\to11$ & 0.04 & 25.02 & 24.71 \\
-    NN leaf $[2,-1,4]$ & 82.05 & $983\to281$ & 0.07 & 181.81 & 39.67 \\
+    \code{alu4} & 6 & 0.74 & 3.51 & 0.80 \\
+    \code{alu5} & 5 & 0.12 & 0.51 & 0.22 \\
+    \code{alu6} & 5 & 0.48 & 2.16 & 0.54 \\
+    \code{alu7} & 4 & 0.24 & 2.31 & 1.88 \\
     \midrule
-    \textbf{Total} & \textbf{130.14} & $\mathbf{1562\to400}$ &
-      \textbf{0.24} & \textbf{286.56} & \textbf{136.08} \\
+    \textbf{Infeas total} & \textbf{20} & \textbf{1.58} &
+      \textbf{8.49} & \textbf{3.44} \\
+    \textbf{Range total} & \textbf{6} & \textbf{1.37} &
+      \textbf{28.41} & -- \\
     \bottomrule
   \end{tabular}
   \end{center}
 
   \vspace{0.5em}
   \begin{itemize}
-    \item Times are seconds on identical VIPR certificate files; steps show
-          complete certificate $\to$ checked slice.
-    \item The compiled CLI is an untrusted performance reference. Full list replay
-          and reconstruction both produce kernel-checked theorems.
-    \item Reconstruction retains the original list-backed checker and reduces total
-          kernel wall time by $52.51\%$ ($2.11\times$ faster).
+    \item Times are seconds for 26 real exact-\scip{} certificates.
+    \item Both Lean columns execute the verified array-backed checker; compiled
+          execution remains an untrusted performance mode.
+    \item The kernel modes reduce the same array-backed checker over either the full
+          certificate or an independently validated infeasibility slice.
   \end{itemize}
 
   \vspace{0.2em}
@@ -546,8 +551,8 @@ theorem certified :
           rounding, assumptions, and branch merging.
     \item The Lean checker replays these rules over exact rationals and proves a
           semantic invariant for every pool entry.
-    \item \code{checkSem\_sound} reduces acceptance to a kernel-checked theorem:
-          no integral valuation satisfies the certified constraints.
+    \item \code{checkVipr\_sound} connects the sole executable checker directly
+          to the declarative VIPR proof system and its semantic result.
     \item Reconstruction improves performance without trusting the slicer, while
           parser-to-source binding remains the main frontend task.
   \end{enumerate}
@@ -569,9 +574,9 @@ theorem certified :
     \item The \vipr{} reference implementation: \code{github.com/scipopt/vipr}.
     \item Project sources:
       \begin{itemize}
-        \item \code{ViprCheck/Cert/ViprSem.lean}
-        \item \code{ViprCheck/Pipeline/Vipr.lean}
-        \item \code{ViprMain.lean}
+        \item \code{LeanVIPR/Cert/ViprSem.lean}
+        \item \code{LeanVIPR/Pipeline/Vipr.lean}
+        \item \code{LeanVIPRMain.lean}
       \end{itemize}
   \end{itemize}
 \end{frame}

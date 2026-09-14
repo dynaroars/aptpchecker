@@ -1,10 +1,10 @@
-import ViprCheck.Cert.ViprCompleteness
+import LeanVIPR.Cert.ViprCompleteness
 
 /-! A concrete LP Farkas witness compiled into a closed VIPR certificate. -/
 
 namespace ViprCompletenessSmoke
 
-open ViprCheck.Cert ViprCheck.Cert.ViprSystem ViprCheck.Cert.ViprCompleteness
+open LeanVIPR.Cert LeanVIPR.Cert.ViprSystem LeanVIPR.Cert.ViprCompleteness
 
 def lpBase : List SLe :=
   [⟨'L', [⟨0, 1⟩], 0⟩, ⟨'G', [⟨0, 1⟩], 1⟩]
@@ -23,7 +23,7 @@ def lpWitness : RationalFarkasWitness lpBase :=
     negative := by
       norm_num [lpBase, resolve, sinitPool, spoolRow, sdflt, scomb, combine, SLe.toLe] }
 
-example : CertificateValid [] lpBase [lpWitness.step] :=
+example : ProofValid [] lpBase [lpWitness.step] :=
   farkasWitness_to_vipr lpWitness
 
 end ViprCompletenessSmoke

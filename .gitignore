@@ -1,11 +1,15 @@
 /.lake/
 /manual/_out/
+__pycache__/
+*.pyc
 *.olean
 *.ilean
 *.c
 *.o
 *.out
 *.aux
+*.bbl
+*.blg
 *.fdb_latexmk
 *.fls
 *.log
