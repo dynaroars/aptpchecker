@@ -123,7 +123,7 @@ In this work, we implement \tool{}, an executable \vipr{} checker in
 \textsc{Lean\,4}\footnote{Hereafter, we refer to \textsc{Lean\,4} simply as \textsc{Lean}.}.
 We connect its acceptance of a certificate to a machine-checked proof of the claimed MIP result: infeasibility, or feasibility of the listed solutions together with validity of the reported objective range.
 Note that we do not verify the solver or the full \vipr{} toolchain.
-Following formally verified certificate checkers for SAT and pseudo-Boolean reasoning~\citep{szeider2026lrat,szeider2026pblean}, we formalize both \tool{}'s executable replay and its soundness proof in \lean{}~\citep{moura2021lean}.\footnote{The source code is available at \url{https://anonymous.4open.science/r/VIPR-Lean/}}
+Following formally verified certificate checkers for SAT and pseudo-Boolean reasoning~\citep{szeider2026lrat,szeider2026pblean}, we formalize both \tool{}'s executable replay and its soundness proof in \lean{}~\citep{moura2021lean}.\footnote{The source code is available at \url{https://anonymous.4open.science/r/LeanVIPR/}}
 
 Given a parsed \vipr{} certificate, \tool{} uses exact rational numbers to replay its derivation steps in order while tracking the branch assumptions behind each constraint.
 During replay, \code{asm} opens a branch assumption, \code{lin} checks a signed linear combination, \code{rnd} checks integer rounding, and \code{uns} joins complementary branches and removes their assumptions.
