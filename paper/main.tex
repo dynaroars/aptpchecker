@@ -123,7 +123,8 @@
 %===============================================================================
 \section{Introduction}\label{sec:intro}
 
-Modern mixed-integer programming (MIP) solvers combine branch-and-bound with numerous inference and numerical routines.
+Mixed-integer programming (MIP) has been adopted in many safety-critical domains, including power-grid unit commitment~\citep{knueven2020mixed}, air-traffic and railway traffic management~\citep{lamorgese2019noncompact}, hardware~\citep{huang2021cosa}, software~\citep{wang2023synthesizing}, and neural-network verification~\citep{tjeng2017evaluating,duong2023dpll,duong2024harnessing,duong2025neuralsat,duong2025neuralsat2,le2025fggm,le2026verifying,le2026neural,le2026formal,duong2026verifying,duong2026verifying2,duong2026verifying3,duong2026clad,duong2026zonogpt,duong2026towards,duong2026generating,duong2026compositional}.
+Modern MIP solvers combine branch-and-bound with numerous inference and numerical routines.
 Exact rational solvers avoid unsound conclusions caused by floating-point error, but remain substantial software systems~\citep{cook2013hybrid,eifler2023computational}.
 An incorrect infeasibility or objective-range result can invalidate every downstream conclusion that depends on it.
 Certification reduces this risk: instead of trusting the solver, we ask it to emit a machine-readable proof and validate that proof with an independent checker.
